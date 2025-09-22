@@ -1,6 +1,8 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+
 
 const MAX_SIZE_BYTES = 50 * 1024 * 1024
+const API_BASE = import.meta?.env?.VITE_API_URL || 'http://localhost:8000'
 const ACCEPTED_TYPES = [
   'text/csv',
   'application/vnd.ms-excel',
@@ -12,6 +14,9 @@ function FileUploadBox() {
   const [fileInfo, setFileInfo] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState('')
+  const [serverData, setServerData] = useState(null)
+  const [isExtracting, setIsExtracting] = useState(false)
+  const [uploadedSampleId, setUploadedSampleId] = useState(null)
   const inputRef = useRef(null)
 
   const onSelectClick = useCallback(() => {
@@ -38,7 +43,11 @@ function FileUploadBox() {
       return
     }
     setError('')
+    setServerData(null)
+    setIsExtracting(false)
+    setUploadedSampleId(null)
     setFileInfo({
+      file,
       name: file.name,
       size: file.size,
       type: file.type,
@@ -70,13 +79,77 @@ function FileUploadBox() {
 
   const handleUpload = async () => {
     if (!fileInfo || isUploading) return
+    setError('')
     setIsUploading(true)
     setFileInfo((prev) => (prev ? { ...prev, status: 'Uploading…' } : prev))
-    // Simulate upload. Replace with real API call.
-    await new Promise((res) => setTimeout(res, 1200))
-    setIsUploading(false)
-    setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+    try {
+      const form = new FormData()
+      form.append('file', fileInfo.file, fileInfo.name)
+      const resp = await fetch(`${API_BASE}/api/upload`, {
+        method: 'POST',
+        body: form,
+      })
+      if (!resp.ok) {
+        const txt = await resp.text()
+        throw new Error(txt || 'Upload failed')
+      }
+      const data = await resp.json()
+      setUploadedSampleId(data?.id || null)
+      const metals = data?.extracted_metals || {}
+      setServerData(data)
+      if (metals && Object.keys(metals).length > 0) {
+        setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+        setIsExtracting(false)
+      } else {
+        setFileInfo((prev) => (prev ? { ...prev, status: 'Extracting…' } : prev))
+        setIsExtracting(true)
+      }
+    } catch (e) {
+      setError(typeof e?.message === 'string' ? e.message : 'Upload failed')
+      setFileInfo((prev) => (prev ? { ...prev, status: 'Error' } : prev))
+    } finally {
+      setIsUploading(false)
+    }
   }
+
+  // Poll backend for extraction results if backend needs more time
+  useEffect(() => {
+    if (!isExtracting || !uploadedSampleId) return
+    let cancelled = false
+    let attempts = 0
+    const maxAttempts = 30 // ~30 seconds
+
+    const tick = async () => {
+      attempts += 1
+      try {
+        const resp = await fetch(`${API_BASE}/api/samples/${uploadedSampleId}`)
+        if (!resp.ok) throw new Error('Polling failed')
+        const detail = await resp.json()
+        const metals = detail?.metals || {}
+        if (metals && Object.keys(metals).length > 0) {
+          if (!cancelled) {
+            setServerData((prev) => ({ ...(prev || {}), extracted_metals: metals }))
+            setIsExtracting(false)
+            setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+          }
+          return
+        }
+      } catch (err) {
+        // swallow errors while polling
+      }
+      if (!cancelled && attempts < maxAttempts) {
+        setTimeout(tick, 1000)
+      } else if (!cancelled) {
+        setIsExtracting(false)
+        setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded (no values found yet)' } : prev))
+      }
+    }
+    const handle = setTimeout(tick, 1000)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [isExtracting, uploadedSampleId])
 
   return (
     <section className="bg-gray-50">
@@ -163,6 +236,34 @@ function FileUploadBox() {
                   Remove and re-upload
                 </button>
               </div>
+              {isExtracting && (
+                <div className="mt-3 text-sm text-gray-700">
+                  Extracting values… this may take a few seconds.
+                </div>
+              )}
+              {(serverData?.extracted_metals || serverData?.metadata_json) && (
+                <div className="mt-4 border border-gray-200 rounded-md p-3">
+                  <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
+                    Extracted metals ({Object.keys(serverData.extracted_metals).length})
+                  </p>
+                  <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
+                    {Object.entries(serverData.extracted_metals).map(([metal, value]) => (
+                      <li key={metal} className="flex justify-between">
+                        <span>{metal}</span>
+                        <span className="font-medium">{value}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {serverData?.metadata_json && (
+                    <div className="mt-4">
+                      <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
+                        Sample details
+                      </p>
+                      <pre className="text-xs bg-gray-50 rounded p-2 overflow-x-auto">{serverData.metadata_json}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -178,5 +279,4 @@ function FileUploadBox() {
 }
 
 export default FileUploadBox
-
-
+ 
