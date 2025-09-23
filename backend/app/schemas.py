@@ -9,3 +9,5 @@ class ExtractedData(BaseModel):
     longitude: Optional[float] = None
     metadata: Optional[str] = None  # JSON string or small text summary
     metals: Optional[Dict[str, float]] = None
+    # Detailed per-metal info for audit and further processing
+    metals_detail: Optional[Dict[str, Dict[str, Optional[float]]]] = None
