@@ -97,11 +97,13 @@ function FileUploadBox() {
       setUploadedSampleId(data?.id || null)
       const metals = data?.extracted_metals || {}
       setServerData(data)
-      if (metals && Object.keys(metals).length > 0) {
+      const hasMetals = metals && Object.keys(metals).length > 0
+      const hasIndices = !!data?.indices
+      if (hasMetals && hasIndices) {
         setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
         setIsExtracting(false)
       } else {
-        setFileInfo((prev) => (prev ? { ...prev, status: 'Extracting…' } : prev))
+        setFileInfo((prev) => (prev ? { ...prev, status: hasMetals ? 'Calculating indices…' : 'Extracting…' } : prev))
         setIsExtracting(true)
       }
     } catch (e) {
@@ -117,7 +119,7 @@ function FileUploadBox() {
     if (!isExtracting || !uploadedSampleId) return
     let cancelled = false
     let attempts = 0
-    const maxAttempts = 30 // ~30 seconds
+    const maxAttempts = 120 // ~2 minutes to allow extraction + index calc
 
     const tick = async () => {
       attempts += 1
@@ -126,13 +128,19 @@ function FileUploadBox() {
         if (!resp.ok) throw new Error('Polling failed')
         const detail = await resp.json()
         const metals = detail?.metals || {}
-        if (metals && Object.keys(metals).length > 0) {
+        const hasMetals = metals && Object.keys(metals).length > 0
+        const hasIndices = !!detail?.indices
+        if (hasMetals || hasIndices) {
           if (!cancelled) {
-            setServerData((prev) => ({ ...(prev || {}), extracted_metals: metals }))
-            setIsExtracting(false)
-            setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+            setServerData((prev) => ({ ...(prev || {}), extracted_metals: metals, assessments: detail?.assessments, indices: detail?.indices }))
+            if (hasMetals && hasIndices) {
+              setIsExtracting(false)
+              setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+              return
+            } else {
+              setFileInfo((prev) => (prev ? { ...prev, status: hasMetals ? 'Calculating indices…' : 'Extracting…' } : prev))
+            }
           }
-          return
         }
       } catch (err) {
         // swallow errors while polling
@@ -141,7 +149,7 @@ function FileUploadBox() {
         setTimeout(tick, 1000)
       } else if (!cancelled) {
         setIsExtracting(false)
-        setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded (no values found yet)' } : prev))
+        setFileInfo((prev) => (prev ? { ...prev, status: 'Timed out waiting for results. Please try again.' } : prev))
       }
     }
     const handle = setTimeout(tick, 1000)
@@ -241,25 +249,51 @@ function FileUploadBox() {
                   Extracting values… this may take a few seconds.
                 </div>
               )}
-              {(serverData?.extracted_metals || serverData?.metadata_json) && (
+              {(serverData?.extracted_metals || serverData?.assessments || serverData?.indices) && (
                 <div className="mt-4 border border-gray-200 rounded-md p-3">
                   <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                    Extracted metals ({Object.keys(serverData.extracted_metals).length})
+                    Extracted metals {serverData?.extracted_metals ? `(${Object.keys(serverData.extracted_metals).length})` : ''}
                   </p>
-                  <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
-                    {Object.entries(serverData.extracted_metals).map(([metal, value]) => (
-                      <li key={metal} className="flex justify-between">
-                        <span>{metal}</span>
-                        <span className="font-medium">{value}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  {serverData?.metadata_json && (
+                  {serverData?.extracted_metals && (
+                    <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
+                      {Object.entries(serverData.extracted_metals).map(([metal, value]) => (
+                        <li key={metal} className="flex justify-between">
+                          <span>{metal}</span>
+                          <span className="font-medium">{value}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {serverData?.assessments && Object.keys(serverData.assessments).length > 0 && (
                     <div className="mt-4">
                       <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                        Sample details
+                        Assessments (value vs limit)
                       </p>
-                      <pre className="text-xs bg-gray-50 rounded p-2 overflow-x-auto">{serverData.metadata_json}</pre>
+                      <ul className="text-sm text-gray-800 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
+                        {Object.entries(serverData.assessments).map(([metal, a]) => (
+                          <li key={metal} className="flex justify-between">
+                            <span>{metal}</span>
+                            <span className={`font-medium ${a?.exceeds === 1 || a?.exceeds === '1' ? 'text-red-600' : 'text-green-700'}`}>
+                              {a?.value_mg_l ?? '-'} / {a?.limit_mg_l ?? '-'} mg/L {a?.exceeds === 1 || a?.exceeds === '1' ? '(exceeds)' : ''}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {serverData?.indices && (
+                    <div className="mt-4">
+                      <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
+                        Indices
+                      </p>
+                      <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
+                        <li className="flex justify-between"><span>HPI</span><span className="font-medium">{serverData.indices.hpi?.toFixed ? serverData.indices.hpi.toFixed(2) : serverData.indices.hpi}</span></li>
+                        <li className="flex justify-between"><span>HEI</span><span className="font-medium">{serverData.indices.hei?.toFixed ? serverData.indices.hei.toFixed(2) : serverData.indices.hei}</span></li>
+                        <li className="flex justify-between"><span>PLI</span><span className="font-medium">{serverData.indices.pli?.toFixed ? serverData.indices.pli.toFixed(3) : serverData.indices.pli}</span></li>
+                        <li className="flex justify-between"><span>Cd</span><span className="font-medium">{serverData.indices.cd_value?.toFixed ? serverData.indices.cd_value.toFixed(2) : serverData.indices.cd_value}</span></li>
+                      </ul>
                     </div>
                   )}
                 </div>
