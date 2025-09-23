@@ -9,19 +9,10 @@ from ..schemas import ExtractedData
 ND_PAT = re.compile(r"^(ND|N/D|NA|N\.?D\.?)$", re.IGNORECASE)
 
 UNIT_MAP = {
-    # Mass concentration to mg/L (water)
     "mg/l": 1.0,
-    "mg/litre": 1.0,
-    "mg/liter": 1.0,
-    "mgperl": 1.0,
-    "ppm": 1.0,  # ~1 mg/L in water
+    "mg/L": 1.0,
     "ug/l": 1e-3,
     "µg/l": 1e-3,
-    "μg/l": 1e-3,
-    "ugperl": 1e-3,
-    "µgperl": 1e-3,
-    "μgperl": 1e-3,
-    "ppb": 1e-3,  # 1 ppb ~ 1 µg/L
 }
 
 METAL_ALIASES = {
@@ -39,7 +30,7 @@ METAL_ALIASES = {
     "ni": "Ni",
 }
 
-ND_POLICY = os.getenv("ND_POLICY", "half").lower()  # 'zero', 'half', or 'drop'
+LOD_POLICY = "zero"  # 'zero' or 'half'
 
 
 def detect_file_kind(filename: str, content_type: str) -> str:
@@ -59,45 +50,18 @@ def detect_file_kind(filename: str, content_type: str) -> str:
     return "csv"
 
 
-def _normalize_unit(unit: Optional[str]) -> str:
-    if not unit:
-        return "mg/l"
-    u = str(unit).strip().lower()
-    # unify wordings and remove spaces
-    u = u.replace("litre", "l").replace("liter", "l")
-    u = u.replace("/ l", "/l").replace(" per l", "perl")
-    u = u.replace(" ", "")
-    return u
-
-
 def normalize_value(value, unit: Optional[str]) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, str):
         v = value.strip()
-        # Handle ND tokens
         if ND_PAT.match(v):
-            if ND_POLICY == "zero":
-                return 0.0
-            # 'half' or 'drop' will be handled when LOD is available or dropped
-            return None
-        # Handle censored like <0.01 or <=0.01
-        m = re.match(r"^<?=?\s*([0-9.]+)$", v)
-        if m:
-            try:
-                lod = float(m.group(1))
-                if ND_POLICY == "zero":
-                    return 0.0
-                if ND_POLICY == "half":
-                    return lod / 2.0
-                return None
-            except Exception:
-                return None
+            return 0.0 if LOD_POLICY == "zero" else None
         try:
             value = float(v)
         except Exception:
             return None
-    factor = UNIT_MAP.get(_normalize_unit(unit), 1.0)
+    factor = UNIT_MAP.get((unit or "mg/l").lower(), 1.0)
     return float(value) * factor
 
 
@@ -128,12 +92,11 @@ def _match_alias(text: str) -> Optional[str]:
     return None
 
 
-def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict, Dict[str, Dict[str, Optional[float]]]]:
+def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict]:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
     metals: Dict[str, float] = {}
-    metals_detail: Dict[str, Dict[str, Optional[float]]] = {}
     info: dict = {"sample_id": None, "collection_date": None, "lab_name": None, "latitude": None, "longitude": None, "pH": None, "TDS_mg_L": None, "EC_mS_cm": None}
 
     # Basic info
@@ -164,55 +127,9 @@ def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict, Dict[str,
     for col in df.columns:
         alias = _match_alias(col)
         if alias and alias not in metals:
-            header_unit = None
-            m = re.search(r"\(([^)]+)\)", str(col))
-            if m:
-                header_unit = m.group(1)
-            # Prefer the first true numeric value (ignoring ND/censored),
-            # then fall back to ND policy if only ND/censored exist.
-            numeric_found: Optional[float] = None
-            censored_lod: Optional[float] = None
-            raw_capture = None
-            for raw in df[col]:
-                try:
-                    if isinstance(raw, str):
-                        v = raw.strip()
-                        if ND_PAT.match(v):
-                            # ND -> skip for selection; may fall back later
-                            continue
-                        m2 = re.match(r"^<?=?\s*([0-9.]+)$", v)
-                        if m2:
-                            censored_lod = float(m2.group(1)) if censored_lod is None else censored_lod
-                            raw_capture = v
-                            continue
-                        raw_val = float(v)
-                        raw_capture = v
-                    else:
-                        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-                            continue
-                        raw_val = float(raw)
-                        raw_capture = str(raw)
-                    # Got a numeric; normalize and break
-                    factor = UNIT_MAP.get(_normalize_unit(header_unit), 1.0)
-                    numeric_found = raw_val * factor
-                    break
-                except Exception:
-                    continue
-            if numeric_found is None and censored_lod is not None:
-                if ND_POLICY == "zero":
-                    numeric_found = 0.0
-                elif ND_POLICY == "half":
-                    factor = UNIT_MAP.get(_normalize_unit(header_unit), 1.0)
-                    numeric_found = (censored_lod / 2.0) * factor
-                else:
-                    numeric_found = None
-            num = numeric_found
+            num = _first_numeric(df[col])
             if num is not None:
                 metals[alias] = num
-                metals_detail[alias] = {
-                    "value_mg_l": num,
-                    "lod": censored_lod,
-                }
 
     # Long format (parameter/value/unit)
     param_col = None
@@ -237,10 +154,6 @@ def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict, Dict[str,
             num = normalize_value(raw_val, str(unit) if unit is not None else None)
             if num is not None:
                 metals[alias] = num
-                metals_detail[alias] = {
-                    "value_mg_l": num,
-                    "lod": None,
-                }
 
     # Pack metadata
     meta_payload = {}
@@ -248,12 +161,12 @@ def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict, Dict[str,
         if info.get(key) is not None and info.get(key) != "":
             meta_payload[key] = info[key]
 
-    return metals, {**info, "_meta_json": json.dumps(meta_payload) if meta_payload else None}, metals_detail
+    return metals, {**info, "_meta_json": json.dumps(meta_payload) if meta_payload else None}
 
 
 def extract_from_csv_excel(path: str) -> ExtractedData:
     df = pd.read_csv(path) if path.lower().endswith(".csv") else pd.read_excel(path)
-    metals, info, metals_detail = parse_dataframe(df)
+    metals, info = parse_dataframe(df)
     return ExtractedData(
         sample_id=info.get("sample_id"),
         collection_date=info.get("collection_date"),
@@ -262,7 +175,6 @@ def extract_from_csv_excel(path: str) -> ExtractedData:
         longitude=info.get("longitude"),
         metadata=info.get("_meta_json"),
         metals={k: v for k, v in metals.items() if v is not None},
-        metals_detail=metals_detail or None,
     )
 
 
