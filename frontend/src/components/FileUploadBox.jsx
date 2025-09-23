@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import ResultsPanel from './ResultsPanel'
 
 
 const MAX_SIZE_BYTES = 50 * 1024 * 1024
@@ -97,11 +98,13 @@ function FileUploadBox() {
       setUploadedSampleId(data?.id || null)
       const metals = data?.extracted_metals || {}
       setServerData(data)
-      if (metals && Object.keys(metals).length > 0) {
+      const hasMetals = metals && Object.keys(metals).length > 0
+      const hasIndices = !!data?.indices
+      if (hasMetals && hasIndices) {
         setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
         setIsExtracting(false)
       } else {
-        setFileInfo((prev) => (prev ? { ...prev, status: 'Extracting…' } : prev))
+        setFileInfo((prev) => (prev ? { ...prev, status: hasMetals ? 'Calculating indices…' : 'Extracting…' } : prev))
         setIsExtracting(true)
       }
     } catch (e) {
@@ -117,7 +120,7 @@ function FileUploadBox() {
     if (!isExtracting || !uploadedSampleId) return
     let cancelled = false
     let attempts = 0
-    const maxAttempts = 30 // ~30 seconds
+    const maxAttempts = 120 // allow more time for compute
 
     const tick = async () => {
       attempts += 1
@@ -126,13 +129,19 @@ function FileUploadBox() {
         if (!resp.ok) throw new Error('Polling failed')
         const detail = await resp.json()
         const metals = detail?.metals || {}
-        if (metals && Object.keys(metals).length > 0) {
+        const hasMetals = metals && Object.keys(metals).length > 0
+        const hasIndices = !!detail?.indices
+        if (hasMetals || hasIndices) {
           if (!cancelled) {
-            setServerData((prev) => ({ ...(prev || {}), extracted_metals: metals }))
-            setIsExtracting(false)
-            setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+            setServerData((prev) => ({ ...(prev || {}), extracted_metals: metals, assessments: detail?.assessments, indices: detail?.indices, metadata_json: detail?.metadata_json }))
+            if (hasMetals && hasIndices) {
+              setIsExtracting(false)
+              setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+              return
+            } else {
+              setFileInfo((prev) => (prev ? { ...prev, status: hasMetals ? 'Calculating indices…' : 'Extracting…' } : prev))
+            }
           }
-          return
         }
       } catch (err) {
         // swallow errors while polling
@@ -141,7 +150,7 @@ function FileUploadBox() {
         setTimeout(tick, 1000)
       } else if (!cancelled) {
         setIsExtracting(false)
-        setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded (no values found yet)' } : prev))
+        setFileInfo((prev) => (prev ? { ...prev, status: 'Timed out waiting for results. Please try again.' } : prev))
       }
     }
     const handle = setTimeout(tick, 1000)
@@ -241,19 +250,21 @@ function FileUploadBox() {
                   Extracting values… this may take a few seconds.
                 </div>
               )}
-              {(serverData?.extracted_metals || serverData?.metadata_json) && (
+              {(serverData?.extracted_metals || serverData?.assessments || serverData?.indices || serverData?.metadata_json) && (
                 <div className="mt-4 border border-gray-200 rounded-md p-3">
                   <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                    Extracted metals ({Object.keys(serverData.extracted_metals).length})
+                    Extracted metals {serverData?.extracted_metals ? `(${Object.keys(serverData.extracted_metals).length})` : ''}
                   </p>
-                  <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
-                    {Object.entries(serverData.extracted_metals).map(([metal, value]) => (
-                      <li key={metal} className="flex justify-between">
-                        <span>{metal}</span>
-                        <span className="font-medium">{value}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {serverData?.extracted_metals && (
+                    <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
+                      {Object.entries(serverData.extracted_metals).map(([metal, value]) => (
+                        <li key={metal} className="flex justify-between">
+                          <span>{metal}</span>
+                          <span className="font-medium">{value}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {serverData?.metadata_json && (
                     <div className="mt-4">
                       <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
@@ -263,6 +274,10 @@ function FileUploadBox() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {(serverData?.indices || serverData?.assessments) && (
+                <ResultsPanel data={serverData} />
               )}
             </div>
           )}
