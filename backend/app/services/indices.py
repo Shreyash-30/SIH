@@ -1,6 +1,6 @@
 import math
-from typing import Dict, Tuple, Optional
 import os
+from typing import Dict, Tuple, Optional
 
 import numpy as np
 
@@ -45,6 +45,7 @@ def _thresholds():
         "HEI_UNSAFE_MIN": float(os.getenv("HEI_UNSAFE_MIN", 10)),
         "PLI_SAFE_MAX": float(os.getenv("PLI_SAFE_MAX", 1)),
         "PLI_UNSAFE_MIN": float(os.getenv("PLI_UNSAFE_MIN", 2)),
+        "STRICT_UNSAFE_FACTOR": float(os.getenv("STRICT_UNSAFE_FACTOR", 2)),
     }
 
 
@@ -52,7 +53,6 @@ def _classify(hpi: Optional[float], hei: Optional[float], pli: Optional[float], 
     if hpi is None and hei is None and pli is None:
         return "unknown"
     t = _thresholds()
-    # Unsafe if any strong signal of high contamination, or severe exceedance
     if (
         (hpi is not None and hpi >= t["HPI_UNSAFE_MIN"]) or
         (pli is not None and pli >= t["PLI_UNSAFE_MIN"]) or
@@ -61,7 +61,6 @@ def _classify(hpi: Optional[float], hei: Optional[float], pli: Optional[float], 
         exceed_count >= 2
     ):
         return "unsafe"
-    # Safe if all metrics indicate low contamination
     if (
         (hpi is not None and hpi < t["HPI_SAFE_MAX"]) and
         (pli is not None and pli < t["PLI_SAFE_MAX"]) and
@@ -69,7 +68,6 @@ def _classify(hpi: Optional[float], hei: Optional[float], pli: Optional[float], 
         exceed_count <= 1 and not severe_exceed
     ):
         return "safe"
-    # Otherwise caution
     return "caution"
 
 
@@ -78,22 +76,13 @@ def compute_indices(concentrations: Dict[str, float], exceed_count: int = 0, sev
     if not per_metal:
         return {"hpi": None, "hei": None, "pli": None, "cd_value": None, "num_metals": 0, "standard_id": get_standard_id(), "category": "unknown"}
 
-    # HPI
     num = sum(pm["Q_i"] * pm["W_i"] for pm in per_metal.values())
     den = sum(pm["W_i"] for pm in per_metal.values())
     hpi = float(num / den) if den > 0 else None
-
-    # HEI
     hei = float(sum(pm["C_i"] / pm["S_i"] for pm in per_metal.values()))
-
-    # PLI (geometric mean of CF_i)
     pli = safe_geometric_mean([pm["CF_i"] for pm in per_metal.values()])
-
-    # Cd (degree of contamination) using sum(CF_i - 1)
     cd_value = float(sum(pm["CF_i"] - 1.0 for pm in per_metal.values()))
-
     category = _classify(hpi, hei, pli, exceed_count, severe_exceed)
-
     return {
         "hpi": hpi,
         "hei": hei,
@@ -102,6 +91,8 @@ def compute_indices(concentrations: Dict[str, float], exceed_count: int = 0, sev
         "num_metals": len(per_metal),
         "standard_id": get_standard_id(),
         "category": category,
+        "thresholds": _thresholds(),
+        "severe_exceed": bool(severe_exceed),
     }
 
 

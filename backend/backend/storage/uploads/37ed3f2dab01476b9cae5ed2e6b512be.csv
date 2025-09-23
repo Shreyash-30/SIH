@@ -1,5 +1,0 @@
-sample_id,collection_date,metal_name,concentration,unit,latitude,longitude
-S1,2025-09-21,Pb,50,µg/L,18.52,73.85
-S2,2025-09-21,Cd,ND,mg/L,18.55,73.82
-S3,2025-09-22,As,<0.002,mg/L,,73.9
-S4,2025-09-22,Pb,0.03,ppm,18.5,
