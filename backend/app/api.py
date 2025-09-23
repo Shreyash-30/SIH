@@ -68,6 +68,7 @@ class UploadResponse(BaseModel):
     extracted_metals: Optional[Dict[str, float]] = None
     assessments: Optional[Dict[str, Dict[str, float]]] = None
     indices: Optional[Dict[str, Any]] = None
+    metadata_json: Optional[str] = None
 
 class SampleListItem(BaseModel):
     id: int
@@ -121,12 +122,19 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
 
     metals_count = 0
     assessments: Dict[str, Dict[str, float]] = {}
+    exceed_count = 0
+    severe_exceed = False
     for metal, value in (extracted.metals or {}).items():
         mc = MetalConcentration(sample_id=sample.id, metal=metal, value_mg_l=value)
         db.add(mc)
         metals_count += 1
         limit = get_limit_mg_l(metal)
         exceeds = 1 if (limit is not None and value is not None and value > limit) else 0
+        if exceeds:
+            exceed_count += 1
+            # Severe exceedance if > 2x limit
+            if limit is not None and value is not None and value >= 2 * limit:
+                severe_exceed = True
         weight = get_weight(metal)
         detail = (extracted.metals_detail or {}).get(metal, {})
         ma = MetalAssessment(
@@ -151,7 +159,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         }
 
     # Compute indices from standardized concentrations
-    index_values = compute_indices(extracted.metals or {})
+    index_values = compute_indices(extracted.metals or {}, exceed_count, severe_exceed)
     si = SampleIndex(
         sample_id=sample.id,
         hpi=index_values.get("hpi"),
@@ -172,6 +180,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         extracted_metals=extracted.metals or {},
         assessments=assessments or {},
         indices=index_values,
+        metadata_json=sample.metadata_json,
     )
 
 @router.get("/samples", response_model=List[SampleListItem])
