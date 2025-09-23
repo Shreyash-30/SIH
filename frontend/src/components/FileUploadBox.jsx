@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import ResultsPanel from './ResultsPanel'
 
 
 const MAX_SIZE_BYTES = 50 * 1024 * 1024
@@ -10,7 +11,7 @@ const ACCEPTED_TYPES = [
   'application/pdf',
 ]
 
-function FileUploadBox() {
+function FileUploadBox({ onComplete }) {
   const [fileInfo, setFileInfo] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState('')
@@ -95,17 +96,10 @@ function FileUploadBox() {
       }
       const data = await resp.json()
       setUploadedSampleId(data?.id || null)
-      const metals = data?.extracted_metals || {}
       setServerData(data)
-      const hasMetals = metals && Object.keys(metals).length > 0
-      const hasIndices = !!data?.indices
-      if (hasMetals && hasIndices) {
-        setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
-        setIsExtracting(false)
-      } else {
-        setFileInfo((prev) => (prev ? { ...prev, status: hasMetals ? 'Calculating indices…' : 'Extracting…' } : prev))
-        setIsExtracting(true)
-      }
+      if (typeof onComplete === 'function') onComplete(data)
+      setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
+      setIsExtracting(false)
     } catch (e) {
       setError(typeof e?.message === 'string' ? e.message : 'Upload failed')
       setFileInfo((prev) => (prev ? { ...prev, status: 'Error' } : prev))
@@ -114,50 +108,8 @@ function FileUploadBox() {
     }
   }
 
-  // Poll backend for extraction results if backend needs more time
-  useEffect(() => {
-    if (!isExtracting || !uploadedSampleId) return
-    let cancelled = false
-    let attempts = 0
-    const maxAttempts = 120 // ~2 minutes to allow extraction + index calc
-
-    const tick = async () => {
-      attempts += 1
-      try {
-        const resp = await fetch(`${API_BASE}/api/samples/${uploadedSampleId}`)
-        if (!resp.ok) throw new Error('Polling failed')
-        const detail = await resp.json()
-        const metals = detail?.metals || {}
-        const hasMetals = metals && Object.keys(metals).length > 0
-        const hasIndices = !!detail?.indices
-        if (hasMetals || hasIndices) {
-          if (!cancelled) {
-            setServerData((prev) => ({ ...(prev || {}), extracted_metals: metals, assessments: detail?.assessments, indices: detail?.indices }))
-            if (hasMetals && hasIndices) {
-              setIsExtracting(false)
-              setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
-              return
-            } else {
-              setFileInfo((prev) => (prev ? { ...prev, status: hasMetals ? 'Calculating indices…' : 'Extracting…' } : prev))
-            }
-          }
-        }
-      } catch (err) {
-        // swallow errors while polling
-      }
-      if (!cancelled && attempts < maxAttempts) {
-        setTimeout(tick, 1000)
-      } else if (!cancelled) {
-        setIsExtracting(false)
-        setFileInfo((prev) => (prev ? { ...prev, status: 'Timed out waiting for results. Please try again.' } : prev))
-      }
-    }
-    const handle = setTimeout(tick, 1000)
-    return () => {
-      cancelled = true
-      clearTimeout(handle)
-    }
-  }, [isExtracting, uploadedSampleId])
+  // Instant display: no polling
+  useEffect(() => { /* no-op */ }, [])
 
   return (
     <section className="bg-gray-50">
@@ -249,54 +201,10 @@ function FileUploadBox() {
                   Extracting values… this may take a few seconds.
                 </div>
               )}
-              {(serverData?.extracted_metals || serverData?.assessments || serverData?.indices) && (
-                <div className="mt-4 border border-gray-200 rounded-md p-3">
-                  <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                    Extracted metals {serverData?.extracted_metals ? `(${Object.keys(serverData.extracted_metals).length})` : ''}
-                  </p>
-                  {serverData?.extracted_metals && (
-                    <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
-                      {Object.entries(serverData.extracted_metals).map(([metal, value]) => (
-                        <li key={metal} className="flex justify-between">
-                          <span>{metal}</span>
-                          <span className="font-medium">{value}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+              {/* Results are shown by parent ResultsPanel */}
 
-                  {serverData?.assessments && Object.keys(serverData.assessments).length > 0 && (
-                    <div className="mt-4">
-                      <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                        Assessments (value vs limit)
-                      </p>
-                      <ul className="text-sm text-gray-800 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
-                        {Object.entries(serverData.assessments).map(([metal, a]) => (
-                          <li key={metal} className="flex justify-between">
-                            <span>{metal}</span>
-                            <span className={`font-medium ${a?.exceeds === 1 || a?.exceeds === '1' ? 'text-red-600' : 'text-green-700'}`}>
-                              {a?.value_mg_l ?? '-'} / {a?.limit_mg_l ?? '-'} mg/L {a?.exceeds === 1 || a?.exceeds === '1' ? '(exceeds)' : ''}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {serverData?.indices && (
-                    <div className="mt-4">
-                      <p className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                        Indices
-                      </p>
-                      <ul className="text-sm text-gray-800 grid grid-cols-2 gap-x-4 gap-y-1">
-                        <li className="flex justify-between"><span>HPI</span><span className="font-medium">{serverData.indices.hpi?.toFixed ? serverData.indices.hpi.toFixed(2) : serverData.indices.hpi}</span></li>
-                        <li className="flex justify-between"><span>HEI</span><span className="font-medium">{serverData.indices.hei?.toFixed ? serverData.indices.hei.toFixed(2) : serverData.indices.hei}</span></li>
-                        <li className="flex justify-between"><span>PLI</span><span className="font-medium">{serverData.indices.pli?.toFixed ? serverData.indices.pli.toFixed(3) : serverData.indices.pli}</span></li>
-                        <li className="flex justify-between"><span>Cd</span><span className="font-medium">{serverData.indices.cd_value?.toFixed ? serverData.indices.cd_value.toFixed(2) : serverData.indices.cd_value}</span></li>
-                      </ul>
-                    </div>
-                  )}
-                </div>
+              {(serverData?.indices || serverData?.assessments) && (
+                <ResultsPanel data={serverData} />
               )}
             </div>
           )}
