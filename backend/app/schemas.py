@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pydantic import BaseModel
 
 class ExtractedData(BaseModel):
@@ -9,3 +9,5 @@ class ExtractedData(BaseModel):
     longitude: Optional[float] = None
     metadata: Optional[str] = None  # JSON string or small text summary
     metals: Optional[Dict[str, float]] = None
+    timeseries: Optional[Dict[str, Dict[str, float]]] = None  # metal -> {period -> value}
+    sample_series: Optional[Dict[str, Dict[str, float]]] = None  # metal -> {sample_label -> value}

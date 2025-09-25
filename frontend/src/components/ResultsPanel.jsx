@@ -104,6 +104,8 @@ export default function ResultsPanel({ data }) {
   const [clusterK, setClusterK] = useState(3)
 
   useEffect(() => {
+    if (!serverData || !serverData.extracted_metals) return
+    
     let aborted = false
     async function fetchStats() {
       try {
@@ -121,9 +123,9 @@ export default function ResultsPanel({ data }) {
     }
     fetchStats()
     return () => { aborted = true }
-  }, [API_BASE])
+  }, [API_BASE, serverData])
 
-  const statEntries = useMemo(() => Object.entries(stats?.metals || {}), [stats])
+  const statEntries = useMemo(() => Object.entries(stats || {}), [stats])
 
   function Histogram({ counts, bins }) {
     if (!counts || !bins || counts.length === 0) return null
@@ -168,6 +170,8 @@ export default function ResultsPanel({ data }) {
   }
 
   useEffect(() => {
+    if (!serverData || !serverData.extracted_metals) return
+    
     let aborted = false
     async function fetchCorr() {
       try {
@@ -185,7 +189,7 @@ export default function ResultsPanel({ data }) {
     }
     fetchCorr()
     return () => { aborted = true }
-  }, [API_BASE, corrMethod])
+  }, [API_BASE, corrMethod, serverData])
 
   function Heatmap({ variables, matrix }) {
     if (!variables || !matrix || variables.length === 0) return null
@@ -219,6 +223,8 @@ export default function ResultsPanel({ data }) {
 
   // Trends fetch
   useEffect(() => {
+    if (!serverData || !serverData.extracted_metals) return
+    
     let aborted = false
     async function fetchTrends() {
       try {
@@ -240,10 +246,12 @@ export default function ResultsPanel({ data }) {
     }
     fetchTrends()
     return () => { aborted = true }
-  }, [API_BASE])
+  }, [API_BASE, serverData])
 
   // Geo fetch
   useEffect(() => {
+    if (!serverData || !serverData.extracted_metals) return
+    
     let aborted = false
     async function fetchGeo() {
       try {
@@ -270,7 +278,7 @@ export default function ResultsPanel({ data }) {
     }
     fetchGeo()
     return () => { aborted = true }
-  }, [API_BASE, geoGrid])
+  }, [API_BASE, geoGrid, serverData])
 
   function LineChart({ dates, values }) {
     const width = 420
@@ -305,6 +313,8 @@ export default function ResultsPanel({ data }) {
 
   // PCA fetch
   useEffect(() => {
+    if (!serverData || !serverData.extracted_metals) return
+    
     let aborted = false
     async function fetchPca() {
       try {
@@ -322,10 +332,12 @@ export default function ResultsPanel({ data }) {
     }
     fetchPca()
     return () => { aborted = true }
-  }, [API_BASE])
+  }, [API_BASE, serverData])
 
   // Cluster fetch
   useEffect(() => {
+    if (!serverData || !serverData.extracted_metals) return
+    
     let aborted = false
     async function fetchCluster() {
       try {
@@ -343,7 +355,7 @@ export default function ResultsPanel({ data }) {
     }
     fetchCluster()
     return () => { aborted = true }
-  }, [API_BASE, clusterK])
+  }, [API_BASE, clusterK, serverData])
 
   function ScreePlot({ evr }) {
     if (!evr || evr.length === 0) return null
@@ -634,29 +646,32 @@ export default function ResultsPanel({ data }) {
         </div>
         {corrLoading && <div className="px-3 pb-3 text-xs" style={{ color: palette.govBlue }}>Loading correlation…</div>}
         {corrError && <div className="px-3 pb-3 text-xs text-red-600">{corrError}</div>}
-        {!corrLoading && !corrError && corr?.variables?.length > 0 && (
+        {!corrLoading && !corrError && corr?.metals?.length > 0 && (
           <div className="px-3 pb-3 overflow-x-auto">
             <div className="mb-3">
-              <Heatmap variables={corr.variables} matrix={corrMethod === 'pearson' ? corr.pearson : corr.spearman} />
+              <Heatmap variables={corr.metals} matrix={corr.matrix} />
             </div>
             <table className="min-w-full text-xs">
               <thead>
                 <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: palette.govBlue }}>
                   <th className="px-2 py-2">Var</th>
-                  {corr.variables.map((v) => (
+                  {corr.metals.map((v) => (
                     <th key={`h-${v}`} className="px-2 py-2">{v}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {corr.variables.map((ri, i) => (
+                {corr.metals.map((ri, i) => (
                   <tr key={`r-${ri}`} className="border-t" style={{ borderColor: palette.border }}>
                     <td className="px-2 py-2" style={{ color: palette.govBlue }}>{ri}</td>
-                    {(corrMethod === 'pearson' ? corr.pearson : corr.spearman)[i].map((val, j) => (
-                      <td key={`c-${i}-${j}`} className="px-2 py-2">
-                        {typeof val === 'number' ? val.toFixed(2) : val}
-                      </td>
-                    ))}
+                    {corr.metals.map((cj, j) => {
+                      const val = corr.matrix[ri]?.[cj] ?? 0
+                      return (
+                        <td key={`c-${i}-${j}`} className="px-2 py-2">
+                          {typeof val === 'number' ? val.toFixed(2) : val}
+                        </td>
+                      )
+                    })}
                   </tr>
                 ))}
               </tbody>

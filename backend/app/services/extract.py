@@ -92,6 +92,40 @@ def _match_alias(text: str) -> Optional[str]:
     return None
 
 
+def _is_month_name(s: str) -> bool:
+    months = {
+        "jan","feb","mar","apr","may","jun","jul","aug","sep","sept","oct","nov","dec"
+    }
+    ls = str(s).strip().lower()
+    return ls in months
+
+
+def _is_month_col(name: str) -> bool:
+    n = str(name).strip()
+    if _is_month_name(n):
+        return True
+    # common formats like Jan-2024, 2024-01, 01-2024
+    low = n.lower()
+    return bool(re.match(r"^(\d{4}[-/](0?[1-9]|1[0-2]))$", low)) or bool(re.match(r"^((0?[1-9]|1[0-2])[-/]\d{4})$", low)) or any(m in low for m in ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"]) 
+
+
+def _normalize_month_label(name: str) -> str:
+    lower = str(name).strip().lower()
+    mapping = {
+        "jan": "Jan", "feb": "Feb", "mar": "Mar", "apr": "Apr", "may": "May", "jun": "Jun",
+        "jul": "Jul", "aug": "Aug", "sep": "Sep", "sept": "Sep", "oct": "Oct", "nov": "Nov", "dec": "Dec",
+    }
+    # direct month name
+    if lower in mapping:
+        return mapping[lower]
+    # try to find any month token in the string
+    for k, v in mapping.items():
+        if k in lower:
+            return v
+    # numeric forms -> keep as-is
+    return str(name)
+
+
 def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict]:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -131,6 +165,70 @@ def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict]:
             if num is not None:
                 metals[alias] = num
 
+    # Month-wise format: first column is metal name, subsequent columns are months with ppm values
+    # Detect if the first column looks like a metal name column and there are month-like columns
+    if len(df.columns) >= 2:
+        first_col = df.columns[0]
+        month_cols = [c for c in df.columns[1:] if _is_month_col(c)]
+        if month_cols and ("metal" in first_col.lower() or "name" in first_col.lower() or any(_match_alias(v) for v in df[first_col].astype(str).tolist())):
+            # Build timeseries dict: metal -> {period -> value_mg_l}
+            timeseries: Dict[str, Dict[str, float]] = {}
+            for _, row in df.iterrows():
+                alias = _match_alias(row.get(first_col, ""))
+                if not alias:
+                    continue
+                for mc in month_cols:
+                    raw = row.get(mc)
+                    if raw is None or (isinstance(raw, str) and raw.strip() in ("", "--")):
+                        continue
+                    # values are in ppm; assume ppm == mg/L for dissolved concentrations
+                    val = normalize_value(raw, "mg/L")
+                    if val is None:
+                        continue
+                    period = _normalize_month_label(mc)
+                    timeseries.setdefault(alias, {})[period] = float(val)
+            # Store in info so caller can return alongside metals
+            if timeseries:
+                # Compute a simple aggregate latest or mean to populate metals if missing
+                for m, series in timeseries.items():
+                    if m not in metals:
+                        try:
+                            metals[m] = float(pd.Series(series.values()).mean())
+                        except Exception:
+                            continue
+                info["_timeseries"] = timeseries
+
+        # If not month-wise, check for sample-wise columns like 'Sample 1', 'Sample-2', 'S1'
+        if not month_cols:
+            sample_cols = []
+            for c in df.columns[1:]:
+                lc = str(c).strip().lower()
+                if lc.startswith("sample ") or lc.startswith("sample-") or lc.startswith("sample_") or re.match(r"^s\d+$", lc):
+                    sample_cols.append(c)
+            if sample_cols and ("metal" in first_col.lower() or "name" in first_col.lower() or any(_match_alias(v) for v in df[first_col].astype(str).tolist())):
+                sample_series: Dict[str, Dict[str, float]] = {}
+                for _, row in df.iterrows():
+                    alias = _match_alias(row.get(first_col, ""))
+                    if not alias:
+                        continue
+                    for sc in sample_cols:
+                        raw = row.get(sc)
+                        if raw is None or (isinstance(raw, str) and raw.strip() in ("", "--")):
+                            continue
+                        val = normalize_value(raw, "mg/L")
+                        if val is None:
+                            continue
+                        sample_series.setdefault(alias, {})[str(sc)] = float(val)
+                if sample_series:
+                    # populate metals aggregates if missing
+                    for m, series in sample_series.items():
+                        if m not in metals:
+                            try:
+                                metals[m] = float(pd.Series(series.values()).mean())
+                            except Exception:
+                                continue
+                    info["_sample_series"] = sample_series
+
     # Long format (parameter/value/unit)
     param_col = None
     value_col = None
@@ -161,7 +259,8 @@ def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict]:
         if info.get(key) is not None and info.get(key) != "":
             meta_payload[key] = info[key]
 
-    return metals, {**info, "_meta_json": json.dumps(meta_payload) if meta_payload else None}
+    payload = {**info, "_meta_json": json.dumps(meta_payload) if meta_payload else None}
+    return metals, payload
 
 
 def extract_from_csv_excel(path: str) -> ExtractedData:
@@ -175,6 +274,8 @@ def extract_from_csv_excel(path: str) -> ExtractedData:
         longitude=info.get("longitude"),
         metadata=info.get("_meta_json"),
         metals={k: v for k, v in metals.items() if v is not None},
+        timeseries=info.get("_timeseries"),
+        sample_series=info.get("_sample_series"),
     )
 
 
