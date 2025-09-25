@@ -4,6 +4,7 @@ import pandas as pd
 from typing import Dict, Optional
 
 from .limits import _active_limits_mg_l
+from .cleaning import preprocess_timeseries
 
 
 def compute_monthly_mi_from_timeseries(timeseries: Dict[str, Dict[str, float]]):
@@ -116,7 +117,13 @@ def compute_hpi_from_metals(metals_mg_l: Dict[str, float], ideals_mg_l: Optional
     }
 
 
-def compute_hpi_from_timeseries(timeseries: Dict[str, Dict[str, float]], ideals_mg_l: Optional[Dict[str, float]] = None, use_annual_average: bool = False):
+def compute_hpi_from_timeseries(
+    timeseries: Dict[str, Dict[str, float]],
+    ideals_mg_l: Optional[Dict[str, float]] = None,
+    use_annual_average: bool = False,
+    preprocess: bool = False,
+    cleaning_kwargs: Optional[Dict] = None,
+):
     """Compute HPI per period (e.g., per month) from a metal->period->value (mg/L) timeseries.
 
     - If use_annual_average=True, also compute HPI based on per-metal annual averages.
@@ -124,6 +131,8 @@ def compute_hpi_from_timeseries(timeseries: Dict[str, Dict[str, float]], ideals_
     """
     if not timeseries:
         return {}
+    if preprocess:
+        timeseries = preprocess_timeseries(timeseries, **(cleaning_kwargs or {}))
     metals = list(timeseries.keys())
     periods = sorted({p for m in metals for p in timeseries[m].keys()})
     df = pd.DataFrame(index=metals, columns=periods, dtype=float)
@@ -197,13 +206,20 @@ def compute_cd_from_metals(metals_mg_l: Dict[str, float]) -> Dict[str, float]:
     }
 
 
-def compute_cd_from_timeseries(timeseries: Dict[str, Dict[str, float]], use_annual_average: bool = False):
+def compute_cd_from_timeseries(
+    timeseries: Dict[str, Dict[str, float]],
+    use_annual_average: bool = False,
+    preprocess: bool = False,
+    cleaning_kwargs: Optional[Dict] = None,
+):
     """Compute Cd per period from a metal->period->value (mg/L) timeseries.
 
     Returns dict with 'per_month', 'overall_avg', and optionally 'annual_avg'.
     """
     if not timeseries:
         return {}
+    if preprocess:
+        timeseries = preprocess_timeseries(timeseries, **(cleaning_kwargs or {}))
     metals = list(timeseries.keys())
     periods = sorted({p for m in metals for p in timeseries[m].keys()})
     df = pd.DataFrame(index=metals, columns=periods, dtype=float)
@@ -268,13 +284,20 @@ def compute_hei_from_metals(metals_mg_l: Dict[str, float]) -> Dict[str, float]:
     }
 
 
-def compute_hei_from_timeseries(timeseries: Dict[str, Dict[str, float]], use_annual_average: bool = False):
+def compute_hei_from_timeseries(
+    timeseries: Dict[str, Dict[str, float]],
+    use_annual_average: bool = False,
+    preprocess: bool = False,
+    cleaning_kwargs: Optional[Dict] = None,
+):
     """Compute HEI per period from a metal->period->value (mg/L) timeseries.
 
     Returns dict with 'per_month', 'overall_avg', and optionally 'annual_avg'.
     """
     if not timeseries:
         return {}
+    if preprocess:
+        timeseries = preprocess_timeseries(timeseries, **(cleaning_kwargs or {}))
     metals = list(timeseries.keys())
     periods = sorted({p for m in metals for p in timeseries[m].keys()})
     df = pd.DataFrame(index=metals, columns=periods, dtype=float)
@@ -468,6 +491,8 @@ def compute_hq_from_timeseries(
     AT: Optional[float] = None,
     rfd_overrides: Optional[Dict[str, float]] = None,
     use_annual_average: bool = False,
+    preprocess: bool = False,
+    cleaning_kwargs: Optional[Dict] = None,
 ):
     """Compute HI per period (sum of HQs) from a metal->period->value (mg/L) timeseries.
 
@@ -475,6 +500,8 @@ def compute_hq_from_timeseries(
     """
     if not timeseries:
         return {}
+    if preprocess:
+        timeseries = preprocess_timeseries(timeseries, **(cleaning_kwargs or {}))
     metals = list(timeseries.keys())
     periods = sorted({p for m in metals for p in timeseries[m].keys()})
     df = pd.DataFrame(index=metals, columns=periods, dtype=float)
