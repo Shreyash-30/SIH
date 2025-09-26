@@ -15,6 +15,11 @@ _ML_DIR = os.path.join(_BASE_DIR, "storage", "ml")
 os.makedirs(_ML_DIR, exist_ok=True)
 app.mount("/static/ml", StaticFiles(directory=_ML_DIR), name="static_ml")
 
+# Serve visualization plots under /static/plots
+_PLOTS_DIR = os.path.join(_BASE_DIR, "storage", "plots")
+os.makedirs(_PLOTS_DIR, exist_ok=True)
+app.mount("/static/plots", StaticFiles(directory=_PLOTS_DIR), name="static_plots")
+
 @app.get("/")
 def health():
     return {"status": "ok"}

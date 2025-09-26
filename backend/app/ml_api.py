@@ -11,6 +11,7 @@ from .services.ml import (
     run_kmeans,
     forecast_timeseries,
     generate_hotspot_map,
+    generate_region_series_plot,
 )
 
 router = APIRouter()
@@ -132,3 +133,32 @@ def ml_hotspot(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Hotspot generation failed: {e}")
+
+
+@router.get("/ml/series")
+def ml_series(
+    target: str = Query("HPI", description="Target metric: HPI/HEI/HI/Cd/CDI/MI or metal symbol/name"),
+    use_forecast: bool = Query(False),
+    horizon: int = Query(1, ge=1, le=24),
+    center_lat: float | None = Query(None),
+    center_lon: float | None = Query(None),
+    radius_km: float | None = Query(None, ge=0.0),
+    db: Session = Depends(get_db),
+):
+    """Generate a regional series (pre line, obs dots, CI band) and save PNG.
+
+    Returns arrays and image_url for embedding in the frontend.
+    """
+    try:
+        res = generate_region_series_plot(
+            db,
+            target=target,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            radius_km=radius_km,
+            use_forecast=use_forecast,
+            horizon=horizon,
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Series generation failed: {e}")

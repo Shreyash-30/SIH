@@ -671,3 +671,63 @@ def format_monthly_statistics_table(monthly_stats: Dict[str, Dict[str, Number]])
         "table_data": table_data,
         "title": "Monthly Statistical Analysis of Metal Concentrations"
     }
+
+
+# --------------------------- Mean vs Limit Bar Plot ---------------------------
+def plot_mean_vs_limit_bar(
+    series: Dict[str, Tuple[float, float]],
+    title: str,
+    out_path: str,
+    figsize: Tuple[int, int] = (10, 4),
+) -> str:
+    """Render a bar chart of mean vs permissible limit per metal and save PNG.
+
+    Args:
+        series: mapping metal -> (mean_mgL, limit_mgL)
+        title: chart title
+        out_path: file path to save PNG
+        figsize: figure size
+
+    Returns:
+        out_path on success (empty string if no data)
+    """
+    if not series:
+        return ""
+
+    metals = list(series.keys())
+    means = [float(series[m][0]) if series[m][0] is not None else np.nan for m in metals]
+    limits = [float(series[m][1]) if series[m][1] is not None else np.nan for m in metals]
+
+    x = np.arange(len(metals))
+    bar_w = 0.6
+
+    plt.figure(figsize=figsize)
+    ax = plt.gca()
+
+    # Colors green below/equal limit, red if exceed; gray if mean missing
+    colors = []
+    for mean, lim in zip(means, limits):
+        if np.isnan(mean):
+            colors.append('#9CA3AF')  # gray for missing
+        elif np.isnan(lim) or mean <= lim:
+            colors.append('#10b981')  # green
+        else:
+            colors.append('#ef4444')  # red
+
+    ax.bar(x, [0 if np.isnan(v) else v for v in means], width=bar_w, color=colors, edgecolor='#374151')
+
+    # Draw per-metal limit dashed lines centered on each bar
+    for xi, lim in zip(x, limits):
+        if np.isnan(lim) or lim < 0:
+            continue
+        ax.hlines(lim, xi - bar_w/2 - 0.05, xi + bar_w/2 + 0.05, colors='#111827', linestyles='dashed', linewidth=1.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(metals, rotation=45, ha='right')
+    ax.set_ylabel('Concentration (mg/L)')
+    ax.set_title(title)
+    ax.grid(axis='y', alpha=0.2)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=180, bbox_inches='tight')
+    plt.close()
+    return out_path

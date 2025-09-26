@@ -42,6 +42,14 @@ export default function ResultsPanel() {
   const [centerLon, setCenterLon] = useState('')
   const [radiusKm, setRadiusKm] = useState('')
   const [useForecastHotspot, setUseForecastHotspot] = useState(false)
+  const [heatmapOn, setHeatmapOn] = useState(true)
+
+  // Server-rendered visualization images
+  const [vizExceedUrl, setVizExceedUrl] = useState(null)
+  const [vizHpiUrl, setVizHpiUrl] = useState(null)
+  const [vizHpiOverallUrl, setVizHpiOverallUrl] = useState(null)
+  const [vizHeiPliUrl, setVizHeiPliUrl] = useState(null)
+  const [vizHqUrl, setVizHqUrl] = useState(null)
 
   // Client-side correlation (fallback) computed from available data
   const clientCorr = useMemo(() => {
@@ -248,6 +256,56 @@ export default function ResultsPanel() {
     return () => { aborted = true }
   }, [data?.id, API_BASE])
 
+  // Fetch server-rendered visualization images (PNG) when sample id is available
+  useEffect(() => {
+    let aborted = false
+    async function fetchViz() {
+      if (!data?.id) return
+      try {
+        // Step 1: Exceedances (mean vs limit)
+        const exResp = await fetch(`${API_BASE}/api/visualization/exceedances?sample_id=${data.id}&use_timeseries_mean=true`)
+        if (exResp.ok) {
+          const exJson = await exResp.json()
+          if (!aborted && exJson?.image_url) setVizExceedUrl(`${API_BASE}${exJson.image_url}`)
+        }
+      } catch {}
+      try {
+        // Step 2: HPI monthly
+        const hpiResp = await fetch(`${API_BASE}/api/visualization/hpi?sample_id=${data.id}`)
+        if (hpiResp.ok) {
+          const hpiJson = await hpiResp.json()
+          if (!aborted && hpiJson?.image_url) setVizHpiUrl(`${API_BASE}${hpiJson.image_url}`)
+        }
+      } catch {}
+      try {
+        // Step 2b: Overall HPI gauge (Safe/Caution/Unsafe)
+        const hpiOverallResp = await fetch(`${API_BASE}/api/visualization/hpi-overall?sample_id=${data.id}`)
+        if (hpiOverallResp.ok) {
+          const hpiOverallJson = await hpiOverallResp.json()
+          if (!aborted && hpiOverallJson?.image_url) setVizHpiOverallUrl(`${API_BASE}${hpiOverallJson.image_url}`)
+        }
+      } catch {}
+      try {
+        // Step 3: HEI & PLI grouped
+        const heiResp = await fetch(`${API_BASE}/api/visualization/hei-pli?sample_id=${data.id}`)
+        if (heiResp.ok) {
+          const heiJson = await heiResp.json()
+          if (!aborted && heiJson?.image_url) setVizHeiPliUrl(`${API_BASE}${heiJson.image_url}`)
+        }
+      } catch {}
+      try {
+        // Step 4: HQ by metal (needs current metals of sample)
+        const hqResp = await fetch(`${API_BASE}/api/visualization/hq?sample_id=${data.id}`)
+        if (hqResp.ok) {
+          const hqJson = await hqResp.json()
+          if (!aborted && hqJson?.image_url) setVizHqUrl(`${API_BASE}${hqJson.image_url}`)
+        }
+      } catch {}
+    }
+    fetchViz()
+    return () => { aborted = true }
+  }, [data?.id, API_BASE])
+
   // Fetch Pearson correlation matrix across samples
   useEffect(() => {
     let aborted = false
@@ -379,6 +437,7 @@ export default function ResultsPanel() {
         {loading && (
           <div className="text-sm text-gray-700 mb-3">Loading…</div>
         )}
+
         {error && (
           <div className="text-sm text-red-600 mb-3">{error}</div>
         )}
@@ -611,300 +670,142 @@ export default function ResultsPanel() {
           </div>
         )}
 
-        {/* Correlation Matrices (Pearson and Spearman across samples) */}
-        {(corrData || corrDataSpearman) && (
-          <div className="mt-8 grid gap-8">
-            {corrData && corrData.metals && corrData.metals.length > 0 && (
+        {/* Correlation matrices removed as requested */}
+        {/* Server-rendered visualizations (images) */}
+        {(vizExceedUrl || vizHpiUrl || vizHpiOverallUrl || vizHeiPliUrl || vizHqUrl) && (
+          <div className="mt-8 grid grid-cols-1 gap-6">
+            {vizExceedUrl && (
               <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
-                  Correlation Matrix (Pearson)
-                </div>
-                {corrLoading && (<div className="p-4 text-sm text-gray-700">Loading pearson correlation...</div>)}
-                {!corrLoading && (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: '#004E92' }}>
-                          <th className="px-3 py-2">Metal</th>
-                          {corrData.metals.map(m => (
-                            <th key={`p-head-${m}`} className="px-3 py-2">{m}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {corrData.metals.map(row => (
-                          <tr key={`p-row-${row}`} className="border-t" style={{ borderColor: '#E5E7EB' }}>
-                            <td className="px-3 py-2 font-medium" style={{ color: '#004E92' }}>{row}</td>
-                            {corrData.metals.map(col => {
-                              const val = corrData?.matrix?.[col]?.[row]
-                              const num = typeof val === 'number' ? val : parseFloat(val)
-                              return (
-                                <td key={`p-cell-${row}-${col}`} className="px-3 py-2">{Number.isFinite(num) ? num.toFixed(3) : '-'}</td>
-                              )
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>Mean vs Limit (Color-coded Exceedances)</div>
+                <div className="p-4 overflow-x-auto"><img src={vizExceedUrl} alt="Exceedances" className="max-w-full h-auto" /></div>
               </div>
             )}
-
-            {corrDataSpearman && corrDataSpearman.metals && corrDataSpearman.metals.length > 0 && (
+            {vizHpiUrl && (
               <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
-                  Correlation Matrix (Spearman)
+                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>Monthly HPI (Color-coded)</div>
+                <div className="p-4 overflow-x-auto"><img src={vizHpiUrl} alt="HPI Monthly" className="max-w-full h-auto" /></div>
+              </div>
+            )}
+            {vizHpiOverallUrl && (
+              <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>Overall HPI Risk</div>
+                <div className="p-4 overflow-x-auto">
+                  <div className="text-xs text-gray-600 mb-2">Thresholds: HPI &lt; 100 → Safe, 100 ≤ HPI &lt; 150 → Caution, HPI ≥ 150 → Unsafe</div>
+                  <img src={vizHpiOverallUrl} alt="HPI Overall Gauge" className="max-w-full h-auto" />
                 </div>
-                {corrLoadingSpearman && (<div className="p-4 text-sm text-gray-700">Loading spearman correlation...</div>)}
-                {!corrLoadingSpearman && (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: '#004E92' }}>
-                          <th className="px-3 py-2">Metal</th>
-                          {corrDataSpearman.metals.map(m => (
-                            <th key={`s-head-${m}`} className="px-3 py-2">{m}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {corrDataSpearman.metals.map(row => (
-                          <tr key={`s-row-${row}`} className="border-t" style={{ borderColor: '#E5E7EB' }}>
-                            <td className="px-3 py-2 font-medium" style={{ color: '#004E92' }}>{row}</td>
-                            {corrDataSpearman.metals.map(col => {
-                              const val = corrDataSpearman?.matrix?.[col]?.[row]
-                              const num = typeof val === 'number' ? val : parseFloat(val)
-                              return (
-                                <td key={`s-cell-${row}-${col}`} className="px-3 py-2">{Number.isFinite(num) ? num.toFixed(3) : '-'}</td>
-                              )
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+              </div>
+            )}
+            {vizHeiPliUrl && (
+              <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>HEI & PLI Monthly Trends</div>
+                <div className="p-4 overflow-x-auto"><img src={vizHeiPliUrl} alt="HEI PLI" className="max-w-full h-auto" /></div>
+              </div>
+            )}
+            {vizHqUrl && (
+              <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>HQ by Metal</div>
+                <div className="p-4 overflow-x-auto"><img src={vizHqUrl} alt="HQ by Metal" className="max-w-full h-auto" /></div>
               </div>
             )}
           </div>
         )}
+                {/* Mean Concentration vs Permissible Limit (color-coded) */}
+                {(() => {
+          // Prefer backend metalIndices.mean_mgL; else compute from timeseries
+          let means = null
+          let metalsForMeans = []
+          if (metalIndices?.table_data?.['mean_mgL'] && metalIndices?.metal_headers) {
+            means = metalIndices.table_data['mean_mgL']
+            metalsForMeans = metalIndices.metal_headers
+          } else if (timeseries) {
+            const metalsList = Object.keys(timeseries || {})
+            means = {}
+            metalsList.forEach(m => {
+              const vals = Object.values(timeseries[m] || {})
+                .map(v => (typeof v === 'number' ? v : parseFloat(v)))
+                .filter(v => Number.isFinite(v))
+              const mean = vals.length ? (vals.reduce((s, v) => s + v, 0) / vals.length) : 0
+              means[m] = mean
+            })
+            metalsForMeans = metalsList
+          }
+          if (!means || metalsForMeans.length === 0) return null
 
-        {/* Forecast & Hotspot (ML) */}
-        {data?.id && (
-          <div className="mt-8">
-            <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-              <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
-                Forecast and Hotspot
-              </div>
-              <div className="p-4 space-y-4">
-                <div className="flex flex-wrap items-end gap-3 text-sm">
-                  <div>
-                    <label className="block mb-1" style={{ color: '#004E92' }}>Target</label>
-                    <select className="border rounded px-2 py-1" value={forecastTarget} onChange={e => setForecastTarget(e.target.value)}>
-                      {['HPI','HEI','HI','Cd','CDI','MI', ...(timeseries ? Object.keys(timeseries) : [])].map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block mb-1" style={{ color: '#004E92' }}>Model</label>
-                    <select className="border rounded px-2 py-1" value={forecastModel} onChange={e => setForecastModel(e.target.value)}>
-                      {['auto','linear','poly2','gbr'].map(m => (<option key={m} value={m}>{m}</option>))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block mb-1" style={{ color: '#004E92' }}>Horizon (months)</label>
-                    <input type="number" min={1} max={24} className="border rounded px-2 py-1 w-24" value={forecastHorizon} onChange={e => setForecastHorizon(parseInt(e.target.value || '1', 10))} />
-                  </div>
-                  <div>
-                    <label className="block mb-1" style={{ color: '#004E92' }}>Center Lat</label>
-                    <input type="number" step="0.0001" className="border rounded px-2 py-1 w-36" placeholder={data?.latitude ? String(data.latitude) : 'e.g., 17.9886'} value={centerLat} onChange={e => setCenterLat(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block mb-1" style={{ color: '#004E92' }}>Center Lon</label>
-                    <input type="number" step="0.0001" className="border rounded px-2 py-1 w-36" placeholder={data?.longitude ? String(data.longitude) : 'e.g., 73.6381'} value={centerLon} onChange={e => setCenterLon(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block mb-1" style={{ color: '#004E92' }}>Radius (km)</label>
-                    <input type="number" min={1} max={200} className="border rounded px-2 py-1 w-28" placeholder="25" value={radiusKm} onChange={e => setRadiusKm(e.target.value)} />
-                  </div>
-                  <label className="inline-flex items-center gap-2 mb-1" style={{ color: '#004E92' }}>
-                    <input type="checkbox" checked={useForecastHotspot} onChange={e => setUseForecastHotspot(e.target.checked)} />
-                    <span>Use Forecast for Hotspot</span>
-                  </label>
-                  <button
-                    className="px-3 py-1.5 rounded text-white"
-                    style={{ backgroundColor: '#2563eb' }}
-                    onClick={async () => {
-                      if (!data?.id) return
-                      try {
-                        setForecastLoading(true)
-                        setForecastData(null)
-                        const url = `${API_BASE}/api/ml/forecast?sample_id=${data.id}&target=${encodeURIComponent(forecastTarget)}&horizon=${forecastHorizon}&model=${forecastModel}`
-                        const resp = await fetch(url)
-                        if (!resp.ok) throw new Error('Forecast failed')
-                        const json = await resp.json()
-                        setForecastData(json)
-                      } catch (e) {
-                        setForecastData({ error: 'Unable to compute forecast' })
-                      } finally {
-                        setForecastLoading(false)
-                      }
-                    }}
-                  >
-                    Run Forecast
-                  </button>
-                  <button
-                    className="px-3 py-1.5 rounded text-white"
-                    style={{ backgroundColor: '#059669' }}
-                    onClick={async () => {
-                      try {
-                        setHotspotLoading(true)
-                        setHotspotInfo(null)
-                        const params = new URLSearchParams({
-                          target: forecastTarget,
-                          use_forecast: useForecastHotspot ? 'true' : 'false',
-                          horizon: String(forecastHorizon),
-                          country: 'india',
-                          heatmap: 'true',
-                        })
-                        const latVal = centerLat || (data?.latitude ? String(data.latitude) : '')
-                        const lonVal = centerLon || (data?.longitude ? String(data.longitude) : '')
-                        const radVal = radiusKm || ''
-                        if (latVal && lonVal && radVal) {
-                          params.set('center_lat', latVal)
-                          params.set('center_lon', lonVal)
-                          params.set('radius_km', radVal)
-                        }
-                        const url = `${API_BASE}/api/ml/hotspot?${params.toString()}`
-                        const resp = await fetch(url)
-                        const json = await resp.json()
-                        setHotspotInfo(json)
-                      } catch (e) {
-                        setHotspotInfo({ error: 'Unable to generate hotspot map' })
-                      } finally {
-                        setHotspotLoading(false)
-                      }
-                    }}
-                  >
-                    Generate Hotspot ({useForecastHotspot ? 'Forecast' : 'Current'})
-                  </button>
+          const series = metalsForMeans.map(m => ({
+            metal: m,
+            mean: parseFloat(means[m]) || 0,
+            limit: parseFloat(limits?.[m]) || 0,
+          }))
+
+          const maxVal = Math.max(1, ...series.flatMap(d => [d.mean, d.limit]).filter(Number.isFinite))
+          const width = Math.max(700, series.length * 70)
+          const height = 320
+          const padding = { top: 28, right: 24, bottom: 70, left: 56 }
+          const chartW = width - padding.left - padding.right
+          const chartH = height - padding.top - padding.bottom
+          const groupWidth = Math.max(28, chartW / (series.length * 1.2))
+          const barWidth = Math.max(18, groupWidth * 0.6)
+          const scaleY = v => chartH * (v / maxVal)
+
+          return (
+            <div className="mt-8">
+              <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
+                  Mean Concentration vs Permissible Limit
                 </div>
-
-                {/* Forecast visualization */}
-                {forecastLoading && (
-                  <div className="text-sm text-gray-700">Running forecast…</div>
-                )}
-                {!forecastLoading && forecastData && !forecastData.error && (
-                  <div className="rounded border p-3" style={{ borderColor: '#E5E7EB' }}>
-                    <div className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
-                      {`Forecast ${forecastData.target} (model: ${forecastData.model})`}
-                    </div>
-                    {(() => {
-                      const hist = forecastData.history || { periods: [], values: [] }
-                      const fc = forecastData.forecast || { periods: [], values: [] }
-                      const ciL = forecastData.ci_low || []
-                      const ciH = forecastData.ci_high || []
-                      const xAll = [...hist.periods, ...fc.periods]
-                      const yAll = [...hist.values, ...fc.values]
-                      const maxY = Math.max(1, ...yAll.filter(v => Number.isFinite(v)))
-                      const width = Math.max(600, xAll.length * 48)
-                      const height = 260
-                      const padding = { top: 20, right: 20, bottom: 60, left: 50 }
-                      const chartW = width - padding.left - padding.right
-                      const chartH = height - padding.top - padding.bottom
-                      const scaleX = (i) => chartW * (i / Math.max(1, xAll.length - 1))
-                      const scaleY = (v) => chartH * (1 - (v / maxY))
-                      const xsHist = hist.values.map((_, i) => scaleX(i))
-                      const xsFc = fc.values.map((_, i) => scaleX(hist.values.length + i))
-                      const pathLine = (xs, ys) => ys.reduce((acc, v, i) => {
-                        const y = Number.isFinite(v) ? scaleY(v) : scaleY(0)
-                        const x = xs[i]
-                        return acc + `${i===0?'M':' L'}${x.toFixed(2)},${y.toFixed(2)}`
-                      }, '')
-                      const histPath = pathLine(xsHist, hist.values)
-                      const fcPath = pathLine(xsFc, fc.values)
-                      // CI area as polygon
-                      const ciXs = xsFc
-                      const ciTop = ciH.map((v, i) => `${ciXs[i].toFixed(2)},${scaleY(Number.isFinite(v)?v:0).toFixed(2)}`)
-                      const ciBot = ciL.map((v, i) => `${ciXs[ciXs.length-1-i].toFixed(2)},${scaleY(Number.isFinite(v)?v:0).toFixed(2)}`)
-                      return (
-                        <div className="overflow-x-auto">
-                          <svg width={width} height={height} role="img" aria-label={`Forecast ${forecastData.target}`}>
-                            <g transform={`translate(${padding.left},${padding.top})`}>
-                              <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#e5e7eb" />
-                              <line x1={0} y1={0} x2={0} y2={chartH} stroke="#e5e7eb" />
-                              {/* CI area */}
-                              {ciTop.length && ciBot.length ? (
-                                <path d={`M${ciTop[0]} L${ciTop.slice(1).join(' L')} L${ciBot.join(' L')} Z`} fill="#fecaca" opacity="0.5" />
-                              ) : null}
-                              {/* History */}
-                              <path d={histPath} fill="none" stroke="#0ea5e9" strokeWidth="2" />
-                              {/* Forecast */}
-                              <path d={fcPath} fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4,4" />
-                              {/* X labels */}
-                              {xAll.map((lbl, i) => (
-                                <text key={`x-${i}`} x={scaleX(i)} y={chartH + 36} transform={`rotate(45, ${scaleX(i)}, ${chartH + 36})`} textAnchor="start" fontSize="10" fill="#374151">{lbl}</text>
-                              ))}
-                              {/* Y labels */}
-                              <text x={-8} y={chartH} textAnchor="end" fontSize="10" fill="#6b7280">0</text>
-                              <text x={-8} y={0} textAnchor="end" fontSize="10" fill="#6b7280">{maxY.toFixed(2)}</text>
-                            </g>
-                          </svg>
-                        </div>
-                      )
-                    })()}
-                  </div>
-                )}
-                {!forecastLoading && forecastData && forecastData.error && (
-                  <div className="text-sm text-red-600">{forecastData.error}</div>
-                )}
-
-                {/* Hotspot result */}
-                {hotspotLoading && (
-                  <div className="text-sm text-gray-700">Generating hotspot map…</div>
-                )}
-                {!hotspotLoading && hotspotInfo && (
-                  <div className="text-sm">
-                    {hotspotInfo.error ? (
-                      <div className="text-red-600">{hotspotInfo.error}</div>
-                    ) : (
-                      <div className="space-y-1">
-                        <div className="text-gray-700">Hotspot generated for {hotspotInfo.target} ({hotspotInfo.mode}). Points: {hotspotInfo.points?.length || 0}</div>
-                        {hotspotInfo.map_path && (
-                          <div>
-                            <span className="text-gray-700">Saved map path (server): </span>
-                            <code className="text-gray-800">{hotspotInfo.map_path}</code>
-                          </div>
-                        )}
-                        {hotspotInfo.image_url && (
-                          <div className="mt-2">
-                            <div className="text-gray-700 mb-1">Preview:</div>
-                            <div className="border rounded p-2 inline-block" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-                              <img src={`${API_BASE}${hotspotInfo.image_url}`} alt="Local hotspot" style={{ maxWidth: '640px', height: 'auto' }} />
-                            </div>
-                          </div>
-                        )}
-                        {!hotspotInfo.image_url && hotspotInfo.map_url && (
-                          <div className="mt-2">
-                            <div className="text-gray-700 mb-1">Interactive Map (iframe):</div>
-                            <div className="border rounded overflow-hidden" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', width: '100%', maxWidth: 700, height: 420 }}>
-                              <iframe title="Hotspot Map" src={`${API_BASE}${hotspotInfo.map_url}`} style={{ width: '100%', height: '100%', border: '0' }} />
-                            </div>
-                            <div className="mt-2">
-                              <a className="text-blue-600 underline" href={`${API_BASE}${hotspotInfo.map_url}`} target="_blank" rel="noreferrer">Open map in new tab</a>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="p-4 overflow-x-auto">
+                  <svg width={width} height={height} role="img" aria-label="Mean Concentration vs Limit">
+                    <g transform={`translate(${padding.left},${padding.top})`}>
+                      <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#e5e7eb" />
+                      <line x1={0} y1={0} x2={0} y2={chartH} stroke="#e5e7eb" />
+                      {series.map((d, i) => {
+                        const x0 = i * (groupWidth * 1.05)
+                        const h = scaleY(Math.max(0, d.mean))
+                        const y = chartH - h
+                        const isExceed = Number.isFinite(d.limit) && d.limit > 0 && d.mean > d.limit
+                        const color = isExceed ? '#ef4444' : '#10b981'
+                        const limitY = chartH - scaleY(Math.max(0, d.limit))
+                        return (
+                          <g key={d.metal}>
+                            {/* Bar */}
+                            <rect x={x0} y={y} width={barWidth} height={h} fill={color} rx={3} />
+                            {/* Mean label */}
+                            <text x={x0 + barWidth / 2} y={y - 6} textAnchor="middle" fontSize="10" fill="#374151">
+                              {Number.isFinite(d.mean) ? d.mean.toFixed(2) : '-'}
+                            </text>
+                            {/* Per-metal limit line */}
+                            {Number.isFinite(d.limit) && d.limit > 0 && (
+                              <g>
+                                <line x1={x0 - 4} x2={x0 + barWidth + 4} y1={limitY} y2={limitY} stroke="#111827" strokeDasharray="4,3" />
+                                <text x={x0 + barWidth + 6} y={limitY - 2} fontSize="10" fill="#111827">{d.limit.toFixed(2)}</text>
+                              </g>
+                            )}
+                            {/* X labels */}
+                            <text transform={`translate(${x0 + barWidth / 2}, ${chartH + 40}) rotate(45)`} textAnchor="start" fontSize="10" fill="#374151">
+                              {d.metal}
+                            </text>
+                          </g>
+                        )
+                      })}
+                      {/* Y axis labels */}
+                      <text x={-8} y={chartH} textAnchor="end" fontSize="10" fill="#6b7280">0</text>
+                      <text x={-8} y={0} textAnchor="end" fontSize="10" fill="#6b7280">{maxVal.toFixed(2)}</text>
+                    </g>
+                    {/* Legend */}
+                    <g transform={`translate(${padding.left}, ${height - 24})`}>
+                      <rect x={0} y={-10} width={12} height={12} fill="#10b981" rx={2} />
+                      <text x={18} y={0} fontSize="12" fill="#374151">Below limit</text>
+                      <rect x={120} y={-10} width={12} height={12} fill="#ef4444" rx={2} />
+                      <text x={138} y={0} fontSize="12" fill="#374151">Exceeds limit</text>
+                      <line x1={230} x2={250} y1={-4} y2={-4} stroke="#111827" strokeDasharray="4,3" />
+                      <text x={256} y={0} fontSize="12" fill="#374151">Limit</text>
+                    </g>
+                  </svg>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {/* HPI Combined Plot: metals on X-axis, W×Q on Y-axis */}
         {timeseries && hpiCombined && (
@@ -1156,6 +1057,229 @@ export default function ResultsPanel() {
                   <span>Correlation unavailable: {corrData.error}</span>
                 ) : (
                   <span>Correlation matrix is not available yet. Ensure there are multiple samples with overlapping metals and try again.</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Forecast & Hotspot (ML) - moved to end */}
+        {data?.id && (
+          <div className="mt-8">
+            <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+              <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
+                Forecast and Hotspot
+              </div>
+              <div className="p-4 space-y-4">
+                <div className="flex flex-wrap items-end gap-3 text-sm">
+                  <div>
+                    <label className="block mb-1" style={{ color: '#004E92' }}>Target</label>
+                    <select className="border rounded px-2 py-1" value={forecastTarget} onChange={e => setForecastTarget(e.target.value)}>
+                      {['HPI','HEI','HI','Cd','CDI','MI', ...(timeseries ? Object.keys(timeseries) : [])].map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block mb-1" style={{ color: '#004E92' }}>Model</label>
+                    <select className="border rounded px-2 py-1" value={forecastModel} onChange={e => setForecastModel(e.target.value)}>
+                      {['auto','linear','poly2','gbr'].map(m => (<option key={m} value={m}>{m}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block mb-1" style={{ color: '#004E92' }}>Horizon (months)</label>
+                    <input type="number" min={1} max={24} className="border rounded px-2 py-1 w-24" value={forecastHorizon} onChange={e => setForecastHorizon(parseInt(e.target.value || '1', 10))} />
+                  </div>
+                  <div>
+                    <label className="block mb-1" style={{ color: '#004E92' }}>Center Lat</label>
+                    <input type="number" step="0.0001" className="border rounded px-2 py-1 w-36" placeholder={data?.latitude ? String(data.latitude) : 'e.g., 17.9886'} value={centerLat} onChange={e => setCenterLat(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block mb-1" style={{ color: '#004E92' }}>Center Lon</label>
+                    <input type="number" step="0.0001" className="border rounded px-2 py-1 w-36" placeholder={data?.longitude ? String(data.longitude) : 'e.g., 73.6381'} value={centerLon} onChange={e => setCenterLon(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block mb-1" style={{ color: '#004E92' }}>Radius (km)</label>
+                    <input type="number" min={1} max={200} className="border rounded px-2 py-1 w-28" placeholder="25" value={radiusKm} onChange={e => setRadiusKm(e.target.value)} />
+                  </div>
+                  <label className="inline-flex items-center gap-2 mb-1" style={{ color: '#004E92' }}>
+                    <input type="checkbox" checked={useForecastHotspot} onChange={e => setUseForecastHotspot(e.target.checked)} />
+                    <span>Use Forecast for Hotspot</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 mb-1" style={{ color: '#004E92' }}>
+                    <input type="checkbox" checked={heatmapOn} onChange={e => setHeatmapOn(e.target.checked)} />
+                    <span>Heatmap Overlay</span>
+                  </label>
+                  <button
+                    className="px-3 py-1.5 rounded text-white"
+                    style={{ backgroundColor: '#2563eb' }}
+                    onClick={async () => {
+                      if (!data?.id) return
+                      try {
+                        setForecastLoading(true)
+                        setForecastData(null)
+                        const url = `${API_BASE}/api/ml/forecast?sample_id=${data.id}&target=${encodeURIComponent(forecastTarget)}&horizon=${forecastHorizon}&model=${forecastModel}`
+                        const resp = await fetch(url)
+                        const json = await resp.json()
+                        setForecastData(json)
+                      } catch (e) {
+                        setForecastData({ error: 'Unable to run forecast' })
+                      } finally {
+                        setForecastLoading(false)
+                      }
+                    }}
+                  >
+                    Run Forecast
+                  </button>
+                  <button
+                    className="px-3 py-1.5 rounded text-white"
+                    style={{ backgroundColor: '#059669' }}
+                    onClick={async () => {
+                      try {
+                        setHotspotLoading(true)
+                        setHotspotInfo(null)
+                        const params = new URLSearchParams({
+                          target: forecastTarget,
+                          use_forecast: useForecastHotspot ? 'true' : 'false',
+                          horizon: String(forecastHorizon),
+                          country: 'india',
+                          heatmap: heatmapOn ? 'true' : 'false',
+                        })
+                        const latVal = centerLat || (data?.latitude ? String(data.latitude) : '')
+                        const lonVal = centerLon || (data?.longitude ? String(data.longitude) : '')
+                        const radVal = radiusKm || ''
+                        if (latVal && lonVal && radVal) {
+                          params.set('center_lat', latVal)
+                          params.set('center_lon', lonVal)
+                          params.set('radius_km', radVal)
+                        }
+                        const url = `${API_BASE}/api/ml/hotspot?${params.toString()}`
+                        const resp = await fetch(url)
+                        const json = await resp.json()
+                        setHotspotInfo(json)
+                      } catch (e) {
+                        setHotspotInfo({ error: 'Unable to generate hotspot map' })
+                      } finally {
+                        setHotspotLoading(false)
+                      }
+                    }}
+                  >
+                    Generate Hotspot ({useForecastHotspot ? 'Forecast' : 'Current'})
+                  </button>
+                </div>
+
+                {/* Forecast visualization */}
+                {forecastLoading && (
+                  <div className="text-sm text-gray-700">Running forecast…</div>
+                )}
+                {!forecastLoading && forecastData && !forecastData.error && (
+                  <div className="rounded border p-3" style={{ borderColor: '#E5E7EB' }}>
+                    <div className="text-sm font-semibold mb-2" style={{ color: '#004E92' }}>
+                      {`Forecast ${forecastData.target} (model: ${forecastData.model})`}
+                    </div>
+                    {(() => {
+                      const hist = forecastData.history || { periods: [], values: [] }
+                      const fc = forecastData.forecast || { periods: [], values: [] }
+                      const ciL = forecastData.ci_low || []
+                      const ciH = forecastData.ci_high || []
+                      const xAll = [...hist.periods, ...fc.periods]
+                      const yAll = [...hist.values, ...fc.values]
+                      const maxY = Math.max(1, ...yAll.filter(v => Number.isFinite(v)))
+                      const width = Math.max(600, xAll.length * 48)
+                      const height = 260
+                      const padding = { top: 20, right: 20, bottom: 60, left: 50 }
+                      const chartW = width - padding.left - padding.right
+                      const chartH = height - padding.top - padding.bottom
+                      const scaleX = (i) => chartW * (i / Math.max(1, xAll.length - 1))
+                      const scaleY = (v) => chartH * (1 - (v / maxY))
+                      const xsHist = hist.values.map((_, i) => scaleX(i))
+                      const xsFc = fc.values.map((_, i) => scaleX(hist.values.length + i))
+                      const pathLine = (xs, ys) => ys.reduce((acc, v, i) => {
+                        const y = Number.isFinite(v) ? scaleY(v) : scaleY(0)
+                        const x = xs[i]
+                        return acc + `${i===0?'M':' L'}${x.toFixed(2)},${y.toFixed(2)}`
+                      }, '')
+                      const histPath = pathLine(xsHist, hist.values)
+                      const fcPath = pathLine(xsFc, fc.values)
+                      // CI area as polygon
+                      const ciXs = xsFc
+                      const ciTop = ciH.map((v, i) => `${ciXs[i].toFixed(2)},${scaleY(Number.isFinite(v)?v:0).toFixed(2)}`)
+                      const ciBot = ciL.map((v, i) => `${ciXs[ciXs.length-1-i].toFixed(2)},${scaleY(Number.isFinite(v)?v:0).toFixed(2)}`)
+                      return (
+                        <div className="overflow-x-auto">
+                          <svg width={width} height={height} role="img" aria-label={`Forecast ${forecastData.target}`}>
+                            <g transform={`translate(${padding.left},${padding.top})`}>
+                              <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#e5e7eb" />
+                              <line x1={0} y1={0} x2={0} y2={chartH} stroke="#e5e7eb" />
+                              {/* CI area */}
+                              {ciTop.length && ciBot.length ? (
+                                <path d={`M${ciTop[0]} L${ciTop.slice(1).join(' L')} L${ciBot.join(' L')} Z`} fill="#fecaca" opacity="0.5" />
+                              ) : null}
+                              {/* History */}
+                              <path d={histPath} fill="none" stroke="#0ea5e9" strokeWidth="2" />
+                              {/* Forecast */}
+                              <path d={fcPath} fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4,4" />
+                              {/* X labels */}
+                              {xAll.map((lbl, i) => (
+                                <text key={`x-${i}`} x={scaleX(i)} y={chartH + 36} transform={`rotate(45, ${scaleX(i)}, ${chartH + 36})`} textAnchor="start" fontSize="10" fill="#374151">{lbl}</text>
+                              ))}
+                              {/* Y labels */}
+                              <text x={-8} y={chartH} textAnchor="end" fontSize="10" fill="#6b7280">0</text>
+                              <text x={-8} y={0} textAnchor="end" fontSize="10" fill="#6b7280">{maxY.toFixed(2)}</text>
+                            </g>
+                          </svg>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
+                {!forecastLoading && forecastData && forecastData.error && (
+                  <div className="text-sm text-red-600">{forecastData.error}</div>
+                )}
+
+                {/* Hotspot result */}
+                {hotspotLoading && (
+                  <div className="text-sm text-gray-700">Generating hotspot map…</div>
+                )}
+                {!hotspotLoading && hotspotInfo && (
+                  <div className="text-sm">
+                    {hotspotInfo.error ? (
+                      <div className="text-red-600">{hotspotInfo.error}</div>
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="text-gray-700">Hotspot generated for {hotspotInfo.target} ({hotspotInfo.mode}). Points: {hotspotInfo.points?.length || 0}</div>
+                        {hotspotInfo.map_path && (
+                          <div>
+                            <span className="text-gray-700">Saved map path (server): </span>
+                            <code className="text-gray-800">{hotspotInfo.map_path}</code>
+                          </div>
+                        )}
+                        {hotspotInfo.image_url && (
+                          <div className="mt-2">
+                            <div className="text-gray-700 mb-1">Preview:</div>
+                            <div className="border rounded p-2 inline-block" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+                              <img src={`${API_BASE}${hotspotInfo.image_url}`} alt="Local hotspot" style={{ maxWidth: '640px', height: 'auto' }} />
+                            </div>
+                            {hotspotInfo.map_url && (
+                              <div className="mt-2">
+                                <a className="text-blue-600 underline" href={`${API_BASE}${hotspotInfo.map_url}`} target="_blank" rel="noreferrer">Open interactive map</a>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {!hotspotInfo.image_url && hotspotInfo.map_url && (
+                          <div className="mt-2">
+                            <div className="text-gray-700 mb-1">Interactive Map (iframe):</div>
+                            <div className="border rounded overflow-hidden" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF', width: '100%', maxWidth: 700, height: 420 }}>
+                              <iframe title="Hotspot Map" src={`${API_BASE}${hotspotInfo.map_url}`} style={{ width: '100%', height: '100%', border: '0' }} />
+                            </div>
+                            <div className="mt-2">
+                              <a className="text-blue-600 underline" href={`${API_BASE}${hotspotInfo.map_url}`} target="_blank" rel="noreferrer">Open map in new tab</a>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

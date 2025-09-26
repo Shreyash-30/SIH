@@ -661,6 +661,137 @@ def generate_hotspot_map(
     return {"target": target.upper(), "mode": mode, "points": points, "map_path": out_path, "map_url": map_url, "image_path": img_out_path, "image_url": image_url}
 
 
+def generate_region_series_plot(
+    db,
+    target: str = "HPI",
+    center_lat: Optional[float] = None,
+    center_lon: Optional[float] = None,
+    radius_km: Optional[float] = None,
+    use_forecast: bool = False,
+    horizon: int = 1,
+) -> Dict[str, Any]:
+    """Build a regional series plot similar to the example: pre (smoothed), obs (points), interval (CI).
+
+    - Collect points within radius around center (or all samples if not provided).
+    - obs: current values for target (or first-forecast if use_forecast=True and enough data).
+    - pre: a smoothed line using Savitzky-Golay if available, else moving average.
+    - CI: empirical ±1.96*std of residuals (obs - pre).
+    Saves PNG to STORAGE_DIR and returns arrays and image_url.
+    """
+    # Collect points similar to hotspot
+    samples = db.query(Sample).all()
+    pts = []
+    for s in samples:
+        if s.latitude is None or s.longitude is None:
+            continue
+        metals_rows = db.query(MetalConcentration).filter(MetalConcentration.sample_id == s.id).all()
+        metals = {r.metal: float(r.value_mg_l) if r.value_mg_l is not None else np.nan for r in metals_rows}
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == s.id).all()
+        timeseries = {}
+        for r in ts_rows:
+            timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else np.nan
+
+        val = None
+        if use_forecast and timeseries:
+            try:
+                fc = forecast_timeseries(db, sample_id=s.id, target=target, horizon=max(1, int(horizon)), model="auto")
+                if not fc.get("error") and fc.get("forecast", {}).get("values"):
+                    val = float(fc["forecast"]["values"][0])
+            except Exception:
+                val = None
+        if val is None:
+            idx = _indices_for_sample(metals, timeseries if timeseries else None)
+            key = target.upper()
+            if key in idx:
+                val = idx[key]
+            elif target in metals:
+                val = metals.get(target)
+
+        if val is None or not np.isfinite(val):
+            continue
+
+        # Radius filter if provided
+        if center_lat is not None and center_lon is not None and radius_km is not None and radius_km > 0:
+            R = 6371.0
+            p1 = np.radians([center_lat, center_lon])
+            p2 = np.radians([s.latitude, s.longitude])
+            dlat = p2[0] - p1[0]
+            dlon = p2[1] - p1[1]
+            a = np.sin(dlat/2)**2 + np.cos(p1[0]) * np.cos(p2[0]) * np.sin(dlon/2)**2
+            c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1-a))
+            dist_km = float(R * c)
+            if dist_km > radius_km:
+                continue
+
+        pts.append({"sample_id": int(s.id), "value": float(val)})
+
+    if not pts:
+        return {"error": "No samples/values found in the specified region for the selected target"}
+
+    # Sort by sample_id (stable) to form a series
+    pts.sort(key=lambda x: x["sample_id"])
+    obs = [p["value"] for p in pts]
+    x = np.arange(1, len(obs) + 1)
+
+    # Pre: smoothing
+    pre = None
+    try:
+        from scipy.signal import savgol_filter
+        win = max(5, (len(obs)//5)*2 + 1)  # odd window
+        poly = 2
+        if win > len(obs):
+            win = len(obs) if len(obs) % 2 == 1 else len(obs) - 1
+        if win < 3:
+            pre = np.array(obs, dtype=float)
+        else:
+            pre = savgol_filter(np.array(obs, dtype=float), window_length=max(3, win), polyorder=min(poly, max(1, (win-1)//2)))
+    except Exception:
+        # Moving average fallback
+        k = max(3, len(obs)//10)
+        arr = np.array(obs, dtype=float)
+        pre = np.convolve(arr, np.ones(k)/k, mode='same') if len(arr) >= k else arr
+
+    pre = np.array(pre, dtype=float)
+    resid = np.array(obs, dtype=float) - pre
+    resid_std = float(np.nanstd(resid)) if len(resid) > 1 else 0.0
+    ci_k = 1.96
+    ci_low = (pre - ci_k * resid_std).tolist()
+    ci_high = (pre + ci_k * resid_std).tolist()
+
+    # Save plot
+    fname = os.path.join(STORAGE_DIR, f"series_{target.upper()}_{'forecast' if use_forecast else 'current'}.png")
+    try:
+        plt.figure(figsize=(9, 4.5))
+        # CI band
+        plt.fill_between(x, ci_low, ci_high, color="#FDE68A", alpha=0.7, label="interval")
+        # pre line
+        plt.plot(x, pre, color="#0ea5e9", linewidth=2, label="pre")
+        # obs dots
+        plt.scatter(x, obs, color="#ef4444", s=20, label="obs")
+        plt.xlabel("data number")
+        plt.ylabel(target.upper())
+        plt.title(f"{target.upper()} in region ({'forecast' if use_forecast else 'current'})")
+        plt.legend(loc="best")
+        plt.tight_layout()
+        plt.savefig(fname, dpi=160)
+        plt.close()
+        image_url = f"/static/ml/{os.path.basename(fname)}"
+    except Exception:
+        logger.exception("Region series: failed to render plot")
+        image_url = None
+
+    return {
+        "target": target.upper(),
+        "mode": "forecast" if use_forecast else "current",
+        "x": x.tolist(),
+        "obs": obs,
+        "pre": pre.tolist(),
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "image_url": image_url,
+    }
+
+
 # --------------------------- Time Series Forecasting ---------------------------
 
 MONTH_ORDER = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]

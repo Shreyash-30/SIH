@@ -1,4 +1,4 @@
-﻿import os
+import os
 import uuid
 import json
 import pandas as pd
@@ -644,11 +644,16 @@ def get_metal_indices_table(sample_id: int = Query(None), db: Session = Depends(
     for r in ts_rows:
         timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
 
-    return format_metal_indices_table(timeseries)
+    return format_metal_formula_table(timeseries)
+
 
 @router.get("/stats/metal-formulas")
-def get_metal_formula_table(sample_id: int = Query(None), db: Session = Depends(get_db)):
-    """Return per-metal values for each formula using mean monthly concentration."""
+def get_metal_formulas_table(sample_id: int = Query(None), db: Session = Depends(get_db)):
+    """Return per-metal formula values table (Q, W, W×Q, Cf, HEI term, CDI, HQ).
+
+    If sample_id is provided, uses its time series; otherwise aggregates all.
+    """
+    # Prefer dedicated time series table if present
     if sample_id:
         ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
     else:
@@ -659,6 +664,255 @@ def get_metal_formula_table(sample_id: int = Query(None), db: Session = Depends(
 
     timeseries: Dict[str, Dict[str, float]] = {}
     for r in ts_rows:
-        timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
+        try:
+            v = float(r.value_mg_l) if r.value_mg_l is not None else None
+        except Exception:
+            v = None
+        timeseries.setdefault(r.metal, {})[str(r.period)] = v
 
     return format_metal_formula_table(timeseries)
+
+
+@router.get("/stats/mean-vs-limit-chart")
+def get_mean_vs_limit_chart(
+    sample_id: Optional[int] = Query(None),
+    use_timeseries_mean: bool = Query(True),
+    title: str = Query("Mean Concentration vs Permissible Limit"),
+    db: Session = Depends(get_db),
+):
+    """Generate a PNG bar chart of mean concentration vs permissible limit per metal.
+
+    Data selection order:
+    1) If use_timeseries_mean and timeseries exist (for sample or all), use per-metal mean across periods.
+    2) Else if a sample_id is provided, use its current metals (extracted values).
+    3) Else return error.
+    """
+    from .services.stats import plot_mean_vs_limit_bar
+    from .services.limits import _active_limits_mg_l
+
+    # Resolve timeseries rows
+    if sample_id:
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+    else:
+        ts_rows = db.query(MetalTimeSeries).all()
+
+    means: Optional[Dict[str, float]] = None
+    if use_timeseries_mean and ts_rows:
+        tmp: Dict[str, List[float]] = {}
+        for r in ts_rows:
+            try:
+                v = float(r.value_mg_l) if r.value_mg_l is not None else None
+            except Exception:
+                v = None
+            if v is None:
+                continue
+            tmp.setdefault(r.metal, []).append(v)
+        if tmp:
+            means = {m: float(sum(vals)/len(vals)) if len(vals) else 0.0 for m, vals in tmp.items()}
+
+    if means is None and sample_id:
+        # Fallback to current metals of the sample
+        s = db.query(Sample).filter(Sample.id == sample_id).first()
+        if not s:
+            return {"error": "Sample not found"}
+        mrows = db.query(MetalConcentration).filter(MetalConcentration.sample_id == sample_id).all()
+        means = {r.metal: float(r.value_mg_l) if r.value_mg_l is not None else 0.0 for r in mrows}
+
+    if not means:
+        return {"error": "No data available to compute mean concentrations"}
+
+    # Limits
+    limits = _active_limits_mg_l()
+    # Build series for plotting
+    series: Dict[str, Tuple[float, Optional[float]]] = {}
+    for m, mean_v in means.items():
+        lim = limits.get(m)
+        if lim is None:
+            for k, v in limits.items():
+                if str(k).lower() == str(m).lower():
+                    lim = v
+                    break
+        series[m] = (float(mean_v), float(lim) if lim is not None else None)
+
+    # Save plot under storage/plots and return URL
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    plots_dir = os.path.join(base_dir, "storage", "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    fname = f"mean_vs_limit_{('sample'+str(sample_id)) if sample_id else 'all'}.png"
+    out_path = os.path.join(plots_dir, fname)
+    plot_mean_vs_limit_bar(series, title=title, out_path=out_path)
+    return {"image_url": f"/static/plots/{fname}", "source": ("timeseries_mean" if ts_rows and use_timeseries_mean else "current"), "metals": list(series.keys())}
+
+
+# --------------------------- Visualization Endpoints ---------------------------
+
+@router.get("/visualization/exceedances")
+def viz_exceedances(
+    sample_id: Optional[int] = Query(None),
+    use_timeseries_mean: bool = Query(True),
+    title: str = Query("Metal Concentration vs BIS/WHO Limits"),
+    db: Session = Depends(get_db),
+):
+    """Generate Step 1: mean vs limit bar chart with exceedance colors."""
+    try:
+        from .services.visualization import plot_exceedances_bar
+        # Resolve timeseries rows
+        if sample_id:
+            ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+        else:
+            ts_rows = db.query(MetalTimeSeries).all()
+
+        means: Optional[Dict[str, float]] = None
+        if use_timeseries_mean and ts_rows:
+            tmp: Dict[str, List[float]] = {}
+            for r in ts_rows:
+                try:
+                    v = float(r.value_mg_l) if r.value_mg_l is not None else None
+                except Exception:
+                    v = None
+                if v is None:
+                    continue
+                tmp.setdefault(r.metal, []).append(v)
+            if tmp:
+                means = {m: float(sum(vals)/len(vals)) if len(vals) else 0.0 for m, vals in tmp.items()}
+
+        if means is None and sample_id:
+            # Fallback to current metals of the sample
+            mrows = db.query(MetalConcentration).filter(MetalConcentration.sample_id == sample_id).all()
+            means = {r.metal: float(r.value_mg_l) if r.value_mg_l is not None else 0.0 for r in mrows}
+
+        if not means:
+            return {"error": "No data available to compute mean concentrations"}
+
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        plots_dir = os.path.join(base_dir, "storage", "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        fname = f"exceedances_{('sample'+str(sample_id)) if sample_id else 'all'}.png"
+        out_path = os.path.join(plots_dir, fname)
+        plot_exceedances_bar(means, title=title, out_path=out_path)
+        return {"image_url": f"/static/plots/{fname}"}
+    except Exception as e:
+        # Return structured error to avoid connection reset (which appears as CORS in browser)
+        return {"error": f"Failed to generate exceedances plot: {e}"}
+
+
+@router.get("/visualization/hpi")
+def viz_hpi(
+    sample_id: Optional[int] = Query(None),
+    title: str = Query("Monthly Heavy Metal Pollution Index (HPI)"),
+    db: Session = Depends(get_db),
+):
+    """Generate Step 2: color-coded HPI monthly bar chart with thresholds."""
+    from .services.visualization import plot_hpi_monthly
+
+    # Build timeseries dict
+    if sample_id:
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+    else:
+        ts_rows = db.query(MetalTimeSeries).all()
+    if not ts_rows:
+        return {"error": "No time series data found"}
+    timeseries: Dict[str, Dict[str, float]] = {}
+    for r in ts_rows:
+        timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    plots_dir = os.path.join(base_dir, "storage", "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    fname = f"hpi_{('sample'+str(sample_id)) if sample_id else 'all'}.png"
+    out_path = os.path.join(plots_dir, fname)
+    plot_hpi_monthly(timeseries, title=title, out_path=out_path)
+    return {"image_url": f"/static/plots/{fname}"}
+
+
+@router.get("/visualization/hpi-overall")
+def viz_hpi_overall(
+    sample_id: Optional[int] = Query(None),
+    title: str = Query("Overall HPI Risk"),
+    db: Session = Depends(get_db),
+):
+    """Generate an overall HPI risk gauge (Safe/Caution/Unsafe) using monthly timeseries.
+
+    Thresholds (commonly used in Indian studies):
+      - HPI < 100: Safe
+      - 100 ≤ HPI < 150: Caution
+      - HPI ≥ 150: Unsafe
+    """
+    from .services.visualization import plot_hpi_overall_gauge
+    try:
+        # Build timeseries dict from MetalTimeSeries
+        if sample_id:
+            ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+        else:
+            ts_rows = db.query(MetalTimeSeries).all()
+        if not ts_rows:
+            return {"error": "No time series data found"}
+        timeseries: Dict[str, Dict[str, float]] = {}
+        for r in ts_rows:
+            try:
+                v = float(r.value_mg_l) if r.value_mg_l is not None else None
+            except Exception:
+                v = None
+            timeseries.setdefault(r.metal, {})[str(r.period)] = v
+
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        plots_dir = os.path.join(base_dir, "storage", "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        fname = f"hpi_overall_{('sample'+str(sample_id)) if sample_id else 'all'}.png"
+        out_path = os.path.join(plots_dir, fname)
+        plot_hpi_overall_gauge(timeseries, title=title, out_path=out_path, safe_thresh=100.0, unsafe_thresh=150.0)
+        return {"image_url": f"/static/plots/{fname}"}
+    except Exception as e:
+        return {"error": f"Failed to generate overall HPI gauge: {e}"}
+
+@router.get("/visualization/hei-pli")
+def viz_hei_pli(
+    sample_id: Optional[int] = Query(None),
+    title: str = Query("HEI and PLI Monthly Trends"),
+    db: Session = Depends(get_db),
+):
+    """Generate Step 3: grouped bar for HEI and PLI with thresholds."""
+    from .services.visualization import plot_hei_pli_grouped
+
+    # Build timeseries dict
+    if sample_id:
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+    else:
+        ts_rows = db.query(MetalTimeSeries).all()
+    if not ts_rows:
+        return {"error": "No time series data found"}
+    timeseries: Dict[str, Dict[str, float]] = {}
+    for r in ts_rows:
+        timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    plots_dir = os.path.join(base_dir, "storage", "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    fname = f"hei_pli_{('sample'+str(sample_id)) if sample_id else 'all'}.png"
+    out_path = os.path.join(plots_dir, fname)
+    plot_hei_pli_grouped(timeseries, title=title, out_path=out_path)
+    return {"image_url": f"/static/plots/{fname}"}
+
+
+@router.get("/visualization/hq")
+def viz_hq(
+    sample_id: int = Query(..., description="Sample ID for current metals"),
+    title: str = Query("Non-Carcinogenic Health Risk (HQ) by Metal"),
+    db: Session = Depends(get_db),
+):
+    """Generate Step 4: HQ per metal bar chart with THQ threshold."""
+    from .services.visualization import plot_hq_per_metal
+
+    # Use current metals for the sample
+    mrows = db.query(MetalConcentration).filter(MetalConcentration.sample_id == sample_id).all()
+    if not mrows:
+        return {"error": "No metals found for sample"}
+    metals = {r.metal: float(r.value_mg_l) if r.value_mg_l is not None else 0.0 for r in mrows}
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    plots_dir = os.path.join(base_dir, "storage", "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    fname = f"hq_{'sample'+str(sample_id)}.png"
+    out_path = os.path.join(plots_dir, fname)
+    plot_hq_per_metal(metals, title=title, out_path=out_path)
+    return {"image_url": f"/static/plots/{fname}"}
