@@ -16,18 +16,19 @@ UNIT_MAP = {
 }
 
 METAL_ALIASES = {
-    "cadmium": "Cd",
-    "cd": "Cd",
-    "lead": "Pb",
-    "pb": "Pb",
-    "mercury": "Hg",
-    "hg": "Hg",
-    "arsenic": "As",
-    "as": "As",
-    "chromium": "Cr",
-    "cr": "Cr",
-    "nickel": "Ni",
-    "ni": "Ni",
+    # Core set (aliases map to chemical symbols used across the app)
+    "cadmium": "Cd", "cd": "Cd",
+    "lead": "Pb", "pb": "Pb",
+    "mercury": "Hg", "hg": "Hg",
+    "arsenic": "As", "as": "As",
+    "chromium": "Cr", "cr": "Cr",
+    "nickel": "Ni", "ni": "Ni",
+    # Additional commonly encountered metals in datasets
+    "iron": "Fe", "fe": "Fe",
+    "zinc": "Zn", "zn": "Zn",
+    "copper": "Cu", "cu": "Cu",
+    "manganese": "Mn", "mn": "Mn",
+    "cobalt": "Co", "co": "Co",
 }
 
 LOD_POLICY = "zero"  # 'zero' or 'half'

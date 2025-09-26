@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import ResultsPanel from './ResultsPanel'
+import { useNavigate } from 'react-router-dom'
 
 
 const MAX_SIZE_BYTES = 50 * 1024 * 1024
@@ -12,6 +12,7 @@ const ACCEPTED_TYPES = [
 ]
 
 function FileUploadBox({ onComplete }) {
+  const navigate = useNavigate()
   const [fileInfo, setFileInfo] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState('')
@@ -100,6 +101,8 @@ function FileUploadBox({ onComplete }) {
       if (typeof onComplete === 'function') onComplete(data)
       setFileInfo((prev) => (prev ? { ...prev, status: 'Uploaded' } : prev))
       setIsExtracting(false)
+      // Navigate to results route with data
+      navigate('/results', { state: { data } })
     } catch (e) {
       setError(typeof e?.message === 'string' ? e.message : 'Upload failed')
       setFileInfo((prev) => (prev ? { ...prev, status: 'Error' } : prev))
@@ -201,11 +204,7 @@ function FileUploadBox({ onComplete }) {
                   Extracting values… this may take a few seconds.
                 </div>
               )}
-              {/* Results are shown by parent ResultsPanel */}
-
-              {(serverData?.indices || serverData?.assessments) && (
-                <ResultsPanel data={serverData} />
-              )}
+              {/* Results now open on separate route */}
             </div>
           )}
 

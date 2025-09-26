@@ -583,3 +583,91 @@ def plot_pca_biplot(
         plt.close()
         return image_base64
 
+
+# --------------------------- Monthly Statistical Analysis ---------------------------
+
+def compute_monthly_statistics(timeseries: Dict[str, Dict[str, Number]]) -> Dict[str, Dict[str, Number]]:
+    """Compute descriptive statistics for each metal across all months.
+    
+    Args:
+        timeseries: metal->period->value (mg/L) dictionary
+        
+    Returns:
+        Dictionary with statistical measures for each metal
+    """
+    if not timeseries:
+        return {}
+    
+    result = {}
+    
+    for metal, period_data in timeseries.items():
+        if not period_data:
+            continue
+            
+        # Convert to pandas Series for easier statistical computation
+        values = pd.Series(list(period_data.values()), dtype=float)
+        values = values.dropna()
+        
+        if len(values) == 0:
+            continue
+            
+        # Calculate all statistical measures
+        stats = describe_series(values)
+        
+        # Add additional measures
+        stats['standard_error'] = float(values.sem()) if len(values) > 1 else 0.0
+        stats['range'] = float(values.max() - values.min())
+        stats['coefficient_of_variation'] = float(values.std() / values.mean()) if values.mean() != 0 else 0.0
+        
+        result[metal] = stats
+    
+    return result
+
+
+def format_monthly_statistics_table(monthly_stats: Dict[str, Dict[str, Number]]) -> Dict[str, Any]:
+    """Format monthly statistics into a table structure for frontend display.
+    
+    Args:
+        monthly_stats: Output from compute_monthly_statistics()
+        
+    Returns:
+        Formatted table data with statistical variables as rows and metals as columns
+    """
+    if not monthly_stats:
+        return {"error": "No statistical data available"}
+    
+    # Define the statistical variables we want to display
+    stat_variables = [
+        'standard_error',
+        'mean', 
+        'median',
+        'std',
+        'var',
+        'kurtosis',
+        'skew',
+        'range',
+        'min',
+        'max'
+    ]
+    
+    # Create the table structure
+    table_data = {}
+    
+    for stat_var in stat_variables:
+        table_data[stat_var] = {}
+        for metal, stats in monthly_stats.items():
+            value = stats.get(stat_var, 0.0)
+            # Round to appropriate decimal places
+            if stat_var in ['standard_error', 'mean', 'median', 'std', 'min', 'max']:
+                table_data[stat_var][metal] = round(float(value), 3)
+            elif stat_var == 'var':
+                table_data[stat_var][metal] = round(float(value), 6)
+            else:  # kurtosis, skew
+                table_data[stat_var][metal] = round(float(value), 3)
+    
+    return {
+        "statistical_variables": stat_variables,
+        "metals": list(monthly_stats.keys()),
+        "table_data": table_data,
+        "title": "Monthly Statistical Analysis of Metal Concentrations"
+    }

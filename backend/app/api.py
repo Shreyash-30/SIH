@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any
@@ -9,7 +10,7 @@ from .database import get_db, Base, engine
 from .services.extract import extract_file_data, detect_file_kind
 from .models import Sample, MetalConcentration, MetalTimeSeries, MetalSampleSeries
 from sqlalchemy.orm import Session
-from .services.limits import get_limit_mg_l, get_weight, get_standard_id
+from .services.limits import get_limit_mg_l, get_weight, get_standard_id, _active_limits_mg_l
 from .services.indices import compute_monthly_mi_from_timeseries
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
@@ -36,7 +37,9 @@ class UploadResponse(BaseModel):
     file_path: str
     summary: Dict[str, int]
     extracted_metals: Optional[Dict[str, float]] = None
-    assessments: Optional[Dict[str, Dict[str, float]]] = None
+    timeseries: Optional[Dict[str, Dict[str, float]]] = None
+    limits_mg_l: Optional[Dict[str, float]] = None
+    assessments: Optional[Dict[str, Dict[str, Optional[float]]]] = None
     indices: Optional[Dict[str, Any]] = None
     metadata_json: Optional[str] = None
 
@@ -57,7 +60,9 @@ class SampleDetail(BaseModel):
     metadata_json: Optional[str]
     file_path: str
     metals: Dict[str, float]
-    assessments: Optional[Dict[str, Dict[str, float]]] = None
+    timeseries: Optional[Dict[str, Dict[str, float]]] = None
+    limits_mg_l: Optional[Dict[str, float]] = None
+    assessments: Optional[Dict[str, Dict[str, Optional[float]]]] = None
     indices: Optional[Dict[str, Any]] = None
 
 @router.post("/upload", response_model=UploadResponse)
@@ -134,11 +139,21 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
             from .models import ComputedIndex
             db.add(ComputedIndex(sample_id=sample.id, kind="MI_monthly", data_json=json.dumps(mi)))
             db.commit()
+    # Limits for metals present (from active standards)
+    present_metals = set((extracted.metals or {}).keys())
+    if getattr(extracted, 'timeseries', None):
+        for m in extracted.timeseries.keys():
+            present_metals.add(m)
+    all_limits = _active_limits_mg_l()
+    limits_subset = {m: all_limits.get(m) for m in present_metals if all_limits.get(m) is not None}
+
     return UploadResponse(
         id=sample.id,
         file_path=dest_path,
         summary={"metals": metals_count},
         extracted_metals=extracted.metals or {},
+        timeseries=getattr(extracted, 'timeseries', None) or None,
+        limits_mg_l=limits_subset or None,
         assessments=assessments or {},
         indices=indices,
         metadata_json=sample.metadata_json,
@@ -186,7 +201,28 @@ def get_sample(sample_id: int, db: Session = Depends(get_db)):
             "exceeds": float(exceeds),
             "weight": weight if weight is not None else None,
         }
-    indices = compute_indices(metals or {}, exceed_count, severe_exceed) if metals else None
+    # Build timeseries dict if rows present
+    ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == s.id).all()
+    timeseries: Optional[Dict[str, Dict[str, float]]] = None
+    if ts_rows:
+        tmp: Dict[str, Dict[str, float]] = {}
+        for r in ts_rows:
+            tmp.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
+        timeseries = tmp
+
+    # Compute pollution indices if metals are present
+    indices = None
+    if metals:
+        from .services.indices import compute_hpi_from_metals
+        try:
+            hpi_result = compute_hpi_from_metals(metals)
+            indices = {
+                'hpi': hpi_result.get('hpi'),
+                'exceed_count': exceed_count,
+                'severe_exceed': severe_exceed
+            }
+        except Exception:
+            indices = None
     return SampleDetail(
         id=s.id,
         sample_id=s.sample_id,
@@ -197,6 +233,8 @@ def get_sample(sample_id: int, db: Session = Depends(get_db)):
         metadata_json=s.metadata_json,
         file_path=s.file_path,
         metals=metals,
+        timeseries=timeseries,
+        limits_mg_l={k: v for k, v in _active_limits_mg_l().items() if k in metals or (timeseries and k in timeseries)},
         assessments=assessments or None,
         indices=indices,
     )
@@ -542,3 +580,32 @@ def get_cluster_analysis(k: int = Query(3, ge=2, le=10), include_params: bool = 
         'pca_explained_variance': pca.explained_variance_ratio_.tolist(),
         'feature_names': metals_wide.columns.tolist()
     }
+
+@router.get("/stats/monthly")
+def get_monthly_statistics(sample_id: int = Query(None), db: Session = Depends(get_db)):
+    """Get monthly statistical analysis for metal concentrations"""
+    from .services.stats import compute_monthly_statistics, format_monthly_statistics_table
+    
+    # Get time series data for the specified sample or all samples
+    if sample_id:
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+    else:
+        ts_rows = db.query(MetalTimeSeries).all()
+    
+    if not ts_rows:
+        return {"error": "No time series data found"}
+    
+    # Convert to timeseries format
+    timeseries = {}
+    for row in ts_rows:
+        if row.metal not in timeseries:
+            timeseries[row.metal] = {}
+        timeseries[row.metal][row.period] = row.value_mg_l
+    
+    # Compute monthly statistics
+    monthly_stats = compute_monthly_statistics(timeseries)
+    
+    # Format for frontend display
+    formatted_table = format_monthly_statistics_table(monthly_stats)
+    
+    return formatted_table
