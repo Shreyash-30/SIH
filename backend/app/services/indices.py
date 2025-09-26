@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 from .limits import _active_limits_mg_l
 from .cleaning import preprocess_timeseries
+from .limits import _active_limits_mg_l
 
 
 def compute_monthly_mi_from_timeseries(timeseries: Dict[str, Dict[str, float]]):
@@ -174,6 +175,166 @@ def compute_hpi_from_timeseries(
         result['annual_avg'] = compute_hpi(W, Q_avg)
 
     return result
+
+
+# --------------------------- Metal Indices Table (per metal stats vs limits) ---------------------------
+
+def format_metal_indices_table(timeseries: Dict[str, Dict[str, float]]):
+    """Build a compact table of per-metal indices using monthly averages.
+
+    For each metal present in the timeseries, we compute:
+      - mean_mgL: Average concentration across periods (mg/L)
+      - limit_mgL: Active standard/permissible limit (mg/L) if available
+      - ratio: mean/limit
+      - percent_limit: (mean/limit)*100
+
+    Returns a dict suitable for frontend table rendering:
+      {
+        'row_labels': ['mean_mgL', 'limit_mgL', 'ratio', 'percent_limit'],
+        'metal_headers': ['Fe','Zn',...],
+        'table_data': { row_label: { metal_abbrev: value } },
+        'title': 'Metal Indices (Avg vs Limits)'
+      }
+    """
+    if not timeseries:
+        return { 'error': 'No timeseries data available' }
+
+    # Average per metal
+    metals = sorted(timeseries.keys())
+    means = {}
+    for m in metals:
+        vals = [float(v) for v in (timeseries.get(m) or {}).values() if v is not None]
+        means[m] = float(np.mean(vals)) if vals else float('nan')
+
+    # Limits
+    limits = _active_limits_mg_l()
+
+    # Abbreviations map (fallback to first two letters capitalized if not found)
+    default_map = {
+        'iron': 'Fe', 'zinc': 'Zn', 'copper': 'Cu', 'manganese': 'Mn', 'nickel': 'Ni',
+        'chromium': 'Cr', 'cobalt': 'Co', 'lead': 'Pb', 'arsenic': 'As', 'cadmium': 'Cd',
+        'mercury': 'Hg'
+    }
+
+    def to_abbrev(name: str) -> str:
+        lower = str(name).strip().lower()
+        if lower in default_map:
+            return default_map[lower]
+        # Try common symbols already (e.g., 'Fe')
+        if len(name) <= 3 and name[0].isalpha():
+            return name
+        return (name[:2]).title()
+
+    # Build columns as abbreviations in the same order as metals
+    metal_headers = [to_abbrev(m) for m in metals]
+
+    # Compute rows
+    row_labels = ['mean_mgL', 'limit_mgL', 'ratio', 'percent_limit']
+    table_data = {k: {} for k in row_labels}
+
+    for m, header in zip(metals, metal_headers):
+        mean_val = means.get(m, float('nan'))
+        lim_val = limits.get(m) if m in limits else limits.get(to_abbrev(m), None)
+        # Attempt case-insensitive key match if direct not found
+        if lim_val is None:
+            for k, v in limits.items():
+                if str(k).lower() == str(m).lower():
+                    lim_val = v
+                    break
+        ratio = float(mean_val / lim_val) if (lim_val not in (None, 0) and not np.isnan(mean_val)) else float('nan')
+        percent = float(ratio * 100.0) if not np.isnan(ratio) else float('nan')
+
+        table_data['mean_mgL'][header] = round(mean_val, 6) if not np.isnan(mean_val) else None
+        table_data['limit_mgL'][header] = round(float(lim_val), 6) if lim_val not in (None, ) else None
+        table_data['ratio'][header] = round(ratio, 6) if not np.isnan(ratio) else None
+        table_data['percent_limit'][header] = round(percent, 2) if not np.isnan(percent) else None
+
+    return {
+        'row_labels': row_labels,
+        'metal_headers': metal_headers,
+        'table_data': table_data,
+        'title': 'Metal Indices (Avg vs Limits)'
+    }
+
+
+def format_metal_formula_table(timeseries: Dict[str, Dict[str, float]]):
+    """Compute per-metal values for each formula using mean concentration across months.
+
+    Formulas covered (see functions in this module):
+      - HPI components: Q_i, W_i, and contribution (W_i * Q_i)
+      - Cd component: Cf_i
+      - HEI term: C_i / Hmax_i
+      - CDI_i using default parameters
+      - HQ_i using default RfD values
+
+    Returns a dict structured for table rendering with metal abbreviations as columns.
+    """
+    if not timeseries:
+        return { 'error': 'No timeseries data available' }
+
+    # Per-metal means
+    metals = sorted(timeseries.keys())
+    C_avg = {}
+    for m in metals:
+        vals = [float(v) for v in (timeseries.get(m) or {}).values() if v is not None]
+        C_avg[m] = float(np.mean(vals)) if vals else float('nan')
+
+    if not metals:
+        return { 'error': 'No metals available' }
+
+    # Standards series aligned to metals with data
+    S = pd.Series(_active_limits_mg_l())
+    S = S.reindex(metals).dropna()
+    if S.empty:
+        return { 'error': 'No standards available for present metals' }
+
+    # Align concentrations to standards index
+    C = pd.Series(C_avg).reindex(S.index)
+
+    # Abbreviations mapping
+    default_map = {
+        'iron': 'Fe', 'zinc': 'Zn', 'copper': 'Cu', 'manganese': 'Mn', 'nickel': 'Ni',
+        'chromium': 'Cr', 'cobalt': 'Co', 'lead': 'Pb', 'arsenic': 'As', 'cadmium': 'Cd',
+        'mercury': 'Hg'
+    }
+    def to_abbrev(name: str) -> str:
+        lower = str(name).strip().lower()
+        if lower in default_map:
+            return default_map[lower]
+        if len(name) <= 3 and name[0].isalpha():
+            return name
+        return (name[:2]).title()
+    metal_headers = [to_abbrev(m) for m in S.index]
+
+    # Compute formula components
+    I = pd.Series(0.0, index=S.index)
+    Q = compute_q(C, S, I)
+    W = compute_w(S)
+    WQ = (W * Q)
+    Cf = compute_cf(C, S)
+    hei_terms = compute_hei_terms(C, S)
+    # CDI and HQ
+    cdi_series = compute_cdi_terms(C, IR=2.0, EF=365.0, ED=30.0, BW=70.0, AT=None)
+    HQ = compute_hq_terms(cdi_series)
+
+    row_labels = ['Q', 'W', 'WQ', 'Cf', 'HEI_term', 'CDI', 'HQ']
+    table_data = {k: {} for k in row_labels}
+
+    for m, header in zip(S.index, metal_headers):
+        table_data['Q'][header] = round(float(Q.get(m, np.nan)), 6) if not np.isnan(Q.get(m, np.nan)) else None
+        table_data['W'][header] = round(float(W.get(m, np.nan)), 6) if not np.isnan(W.get(m, np.nan)) else None
+        table_data['WQ'][header] = round(float(WQ.get(m, np.nan)), 6) if not np.isnan(WQ.get(m, np.nan)) else None
+        table_data['Cf'][header] = round(float(Cf.get(m, np.nan)), 6) if not np.isnan(Cf.get(m, np.nan)) else None
+        table_data['HEI_term'][header] = round(float(hei_terms.get(m, np.nan)), 6) if not np.isnan(hei_terms.get(m, np.nan)) else None
+        table_data['CDI'][header] = round(float(cdi_series.get(m, np.nan)), 9) if not np.isnan(cdi_series.get(m, np.nan)) else None
+        table_data['HQ'][header] = round(float(HQ.get(m, np.nan)), 6) if not np.isnan(HQ.get(m, np.nan)) else None
+
+    return {
+        'row_labels': row_labels,
+        'metal_headers': metal_headers,
+        'table_data': table_data,
+        'title': 'Metal Indices (Formula Values using Monthly Means)'
+    }
 
 
 # --------------------------- Contamination Degree (Cd) ---------------------------

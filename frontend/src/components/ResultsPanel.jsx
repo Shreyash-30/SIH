@@ -9,6 +9,10 @@ export default function ResultsPanel() {
   const [error, setError] = useState('')
   const [monthlyStats, setMonthlyStats] = useState(null)
   const [statsLoading, setStatsLoading] = useState(false)
+  const [metalIndices, setMetalIndices] = useState(null)
+  const [indicesLoading, setIndicesLoading] = useState(false)
+  const [metalFormulas, setMetalFormulas] = useState(null)
+  const [formulasLoading, setFormulasLoading] = useState(false)
   const API_BASE = import.meta?.env?.VITE_API_URL || 'http://localhost:8000'
 
   // If we don't have data from navigation, fetch most recent sample detail from backend
@@ -80,6 +84,50 @@ export default function ResultsPanel() {
       }
     }
     fetchMonthlyStats()
+    return () => { aborted = true }
+  }, [timeseries, data?.id, API_BASE])
+
+  // Fetch metal indices table (avg vs limits) when we have timeseries
+  useEffect(() => {
+    let aborted = false
+    async function fetchMetalIndices() {
+      if (!timeseries || !data?.id) return
+      try {
+        setIndicesLoading(true)
+        const resp = await fetch(`${API_BASE}/api/stats/metal-indices?sample_id=${data.id}`)
+        if (!resp.ok) throw new Error('Failed to load metal indices')
+        const json = await resp.json()
+        if (!aborted) setMetalIndices(json)
+      } catch (e) {
+        console.error('Error fetching metal indices:', e)
+        if (!aborted) setMetalIndices(null)
+      } finally {
+        if (!aborted) setIndicesLoading(false)
+      }
+    }
+    fetchMetalIndices()
+    return () => { aborted = true }
+  }, [timeseries, data?.id, API_BASE])
+
+  // Fetch per-metal formula values table
+  useEffect(() => {
+    let aborted = false
+    async function fetchMetalFormulas() {
+      if (!timeseries || !data?.id) return
+      try {
+        setFormulasLoading(true)
+        const resp = await fetch(`${API_BASE}/api/stats/metal-formulas?sample_id=${data.id}`)
+        if (!resp.ok) throw new Error('Failed to load metal formulas')
+        const json = await resp.json()
+        if (!aborted) setMetalFormulas(json)
+      } catch (e) {
+        console.error('Error fetching metal formulas:', e)
+        if (!aborted) setMetalFormulas(null)
+      } finally {
+        if (!aborted) setFormulasLoading(false)
+      }
+    }
+    fetchMetalFormulas()
     return () => { aborted = true }
   }, [timeseries, data?.id, API_BASE])
 
@@ -204,6 +252,101 @@ export default function ResultsPanel() {
                           {monthlyStats.metals?.map(metal => (
                             <td key={`${statVar}-${metal}`} className="px-3 py-2">
                               {monthlyStats.table_data[statVar]?.[metal] ?? '-'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Metal Indices Table (below previous table) */}
+        {timeseries && metalIndices && !metalIndices.error && (
+          <div className="mt-8">
+            <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+              <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
+                {metalIndices.title || 'Metal Indices'}
+              </div>
+              {indicesLoading && (
+                <div className="p-4 text-sm text-gray-700">Loading metal indices...</div>
+              )}
+              {!indicesLoading && metalIndices.table_data && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: '#004E92' }}>
+                        <th className="px-3 py-2">Metal</th>
+                        {metalIndices.metal_headers?.map(h => (
+                          <th key={h} className="px-3 py-2">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {metalIndices.row_labels?.map(label => (
+                        <tr key={label} className="border-t" style={{ borderColor: '#E5E7EB' }}>
+                          <td className="px-3 py-2 font-medium" style={{ color: '#004E92' }}>
+                            {label === 'mean_mgL' ? 'Mean (mg/L)'
+                              : label === 'limit_mgL' ? 'Permissible (mg/L)'
+                              : label === 'ratio' ? 'Mean / Limit'
+                              : label === 'percent_limit' ? '% of Limit'
+                              : label}
+                          </td>
+                          {metalIndices.metal_headers?.map(h => (
+                            <td key={`${label}-${h}`} className="px-3 py-2">
+                              {metalIndices.table_data?.[label]?.[h] ?? '-'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Metal Formula Values Table */}
+        {timeseries && metalFormulas && !metalFormulas.error && (
+          <div className="mt-8">
+            <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+              <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
+                {metalFormulas.title || 'Metal Formula Values'}
+              </div>
+              {formulasLoading && (
+                <div className="p-4 text-sm text-gray-700">Loading formula values...</div>
+              )}
+              {!formulasLoading && metalFormulas.table_data && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: '#004E92' }}>
+                        <th className="px-3 py-2">Metal</th>
+                        {metalFormulas.metal_headers?.map(h => (
+                          <th key={h} className="px-3 py-2">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {metalFormulas.row_labels?.map(label => (
+                        <tr key={label} className="border-t" style={{ borderColor: '#E5E7EB' }}>
+                          <td className="px-3 py-2 font-medium" style={{ color: '#004E92' }}>
+                            {label === 'Q' ? 'Q (HPI)'
+                              : label === 'W' ? 'W (HPI)'
+                              : label === 'WQ' ? 'W×Q (HPI contribution)'
+                              : label === 'Cf' ? 'Cf (Cd)'
+                              : label === 'HEI_term' ? 'Term (HEI)'
+                              : label === 'CDI' ? 'CDI'
+                              : label === 'HQ' ? 'HQ'
+                              : label}
+                          </td>
+                          {metalFormulas.metal_headers?.map(h => (
+                            <td key={`${label}-${h}`} className="px-3 py-2">
+                              {metalFormulas.table_data?.[label]?.[h] ?? '-'}
                             </td>
                           ))}
                         </tr>

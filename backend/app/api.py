@@ -11,7 +11,7 @@ from .services.extract import extract_file_data, detect_file_kind
 from .models import Sample, MetalConcentration, MetalTimeSeries, MetalSampleSeries
 from sqlalchemy.orm import Session
 from .services.limits import get_limit_mg_l, get_weight, get_standard_id, _active_limits_mg_l
-from .services.indices import compute_monthly_mi_from_timeseries
+from .services.indices import compute_monthly_mi_from_timeseries, format_metal_indices_table, format_metal_formula_table
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -609,3 +609,41 @@ def get_monthly_statistics(sample_id: int = Query(None), db: Session = Depends(g
     formatted_table = format_monthly_statistics_table(monthly_stats)
     
     return formatted_table
+
+@router.get("/stats/metal-indices")
+def get_metal_indices_table(sample_id: int = Query(None), db: Session = Depends(get_db)):
+    """Return compact metal indices table (avg vs limit, ratios) using monthly data.
+
+    If sample_id is provided, uses its time series; otherwise aggregates all.
+    """
+    # Prefer dedicated time series table if present
+    if sample_id:
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+    else:
+        ts_rows = db.query(MetalTimeSeries).all()
+
+    if not ts_rows:
+        return { 'error': 'No time series data found' }
+
+    timeseries: Dict[str, Dict[str, float]] = {}
+    for r in ts_rows:
+        timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
+
+    return format_metal_indices_table(timeseries)
+
+@router.get("/stats/metal-formulas")
+def get_metal_formula_table(sample_id: int = Query(None), db: Session = Depends(get_db)):
+    """Return per-metal values for each formula using mean monthly concentration."""
+    if sample_id:
+        ts_rows = db.query(MetalTimeSeries).filter(MetalTimeSeries.sample_id == sample_id).all()
+    else:
+        ts_rows = db.query(MetalTimeSeries).all()
+
+    if not ts_rows:
+        return { 'error': 'No time series data found' }
+
+    timeseries: Dict[str, Dict[str, float]] = {}
+    for r in ts_rows:
+        timeseries.setdefault(r.metal, {})[str(r.period)] = float(r.value_mg_l) if r.value_mg_l is not None else None
+
+    return format_metal_formula_table(timeseries)
