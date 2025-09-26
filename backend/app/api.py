@@ -1,4 +1,4 @@
-import os
+﻿import os
 import uuid
 import json
 import pandas as pd
@@ -345,13 +345,18 @@ def get_correlation_matrix(method: str = Query("pearson", regex="^(pearson|spear
     # Get sample metadata
     samples_data = db.query(Sample).all()
     for s in samples_data:
+        meta = {}
         if s.metadata_json:
-            if 'ph' in s.metadata_json:
-                metals_wide.loc[s.id, 'pH'] = s.metadata_json['ph']
-            if 'tds' in s.metadata_json:
-                metals_wide.loc[s.id, 'TDS'] = s.metadata_json['tds']
-            if 'ec' in s.metadata_json:
-                metals_wide.loc[s.id, 'EC'] = s.metadata_json['ec']
+            try:
+                meta = s.metadata_json if isinstance(s.metadata_json, dict) else json.loads(s.metadata_json)
+            except Exception:
+                meta = {}
+        if 'ph' in meta:
+            metals_wide.loc[s.id, 'pH'] = meta['ph']
+        if 'tds' in meta:
+            metals_wide.loc[s.id, 'TDS'] = meta['tds']
+        if 'ec' in meta:
+            metals_wide.loc[s.id, 'EC'] = meta['ec']
     
     # Calculate correlation matrix
     corr_matrix = metals_wide.corr(method=method)
@@ -485,13 +490,18 @@ def get_pca_analysis(include_params: bool = Query(True), n_components: int = Que
     if include_params:
         samples_data = db.query(Sample).all()
         for s in samples_data:
+            meta = {}
             if s.metadata_json:
-                if 'ph' in s.metadata_json:
-                    metals_wide.loc[s.id, 'pH'] = s.metadata_json['ph']
-                if 'tds' in s.metadata_json:
-                    metals_wide.loc[s.id, 'TDS'] = s.metadata_json['tds']
-                if 'ec' in s.metadata_json:
-                    metals_wide.loc[s.id, 'EC'] = s.metadata_json['ec']
+                try:
+                    meta = s.metadata_json if isinstance(s.metadata_json, dict) else json.loads(s.metadata_json)
+                except Exception:
+                    meta = {}
+            if 'ph' in meta:
+                metals_wide.loc[s.id, 'pH'] = meta['ph']
+            if 'tds' in meta:
+                metals_wide.loc[s.id, 'TDS'] = meta['tds']
+            if 'ec' in meta:
+                metals_wide.loc[s.id, 'EC'] = meta['ec']
     
     # Handle missing values
     metals_wide = metals_wide.fillna(metals_wide.mean())
@@ -540,13 +550,18 @@ def get_cluster_analysis(k: int = Query(3, ge=2, le=10), include_params: bool = 
     if include_params:
         samples_data = db.query(Sample).all()
         for s in samples_data:
+            meta = {}
             if s.metadata_json:
-                if 'ph' in s.metadata_json:
-                    metals_wide.loc[s.id, 'pH'] = s.metadata_json['ph']
-                if 'tds' in s.metadata_json:
-                    metals_wide.loc[s.id, 'TDS'] = s.metadata_json['tds']
-                if 'ec' in s.metadata_json:
-                    metals_wide.loc[s.id, 'EC'] = s.metadata_json['ec']
+                try:
+                    meta = s.metadata_json if isinstance(s.metadata_json, dict) else json.loads(s.metadata_json)
+                except Exception:
+                    meta = {}
+            if 'ph' in meta:
+                metals_wide.loc[s.id, 'pH'] = meta['ph']
+            if 'tds' in meta:
+                metals_wide.loc[s.id, 'TDS'] = meta['tds']
+            if 'ec' in meta:
+                metals_wide.loc[s.id, 'EC'] = meta['ec']
     
     # Handle missing values
     metals_wide = metals_wide.fillna(metals_wide.mean())

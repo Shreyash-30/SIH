@@ -85,6 +85,64 @@ def _first_float(series: pd.Series) -> Optional[float]:
     return None
 
 
+def _parse_dms_to_decimal(text: str) -> Optional[float]:
+    """Parse DMS strings like 17°59′19″N or 73°38′17″E to decimal degrees.
+
+    Supports symbols: °, º, deg; minutes ', ′; seconds ", ″; optional hemisphere N/S/E/W.
+    """
+    if text is None:
+        return None
+    s = str(text).strip()
+    if s == "":
+        return None
+    # Replace Unicode primes with plain equivalents
+    s_norm = s.replace("º", "°").replace("deg", "°").replace("′", "'").replace("″", '"')
+    # Regex to capture D, M, S and optional hemisphere
+    # Examples: 17°59'19"N, 73 38 17 E, 17°59N, 17.9886N
+    dms_pattern = re.compile(
+        r"^\s*(?P<deg>-?\d+(?:\.\d+)?)\s*(?:°)?\s*(?P<min>\d+(?:\.\d+)?)?\s*(?:'|m)?\s*(?P<sec>\d+(?:\.\d+)?)?\s*(?:\"|s)?\s*(?P<hem>[NSEWnsew])?\s*$"
+    )
+    m = dms_pattern.match(s_norm)
+    if not m:
+        # Try plain float
+        try:
+            return float(s)
+        except Exception:
+            return None
+    deg = float(m.group("deg"))
+    minutes = float(m.group("min")) if m.group("min") is not None else 0.0
+    seconds = float(m.group("sec")) if m.group("sec") is not None else 0.0
+    hem = m.group("hem").upper() if m.group("hem") else None
+    dec = abs(deg) + minutes / 60.0 + seconds / 3600.0
+    if deg < 0:
+        dec = -dec
+    if hem in ("S", "W"):
+        dec = -abs(dec)
+    if hem in ("N", "E"):
+        dec = abs(dec)
+    return dec
+
+
+def _first_coord(series: pd.Series) -> Optional[float]:
+    """Return the first coordinate value in decimal degrees from a series.
+
+    Attempts float parsing, then DMS parsing.
+    """
+    for raw in series:
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            continue
+        # Try float first
+        try:
+            return float(str(raw).strip())
+        except Exception:
+            pass
+        # Try DMS
+        dec = _parse_dms_to_decimal(str(raw))
+        if dec is not None:
+            return dec
+    return None
+
+
 def _match_alias(text: str) -> Optional[str]:
     lower = str(text).strip().lower()
     for key, alias in METAL_ALIASES.items():
@@ -147,9 +205,9 @@ def parse_dataframe(df: pd.DataFrame) -> Tuple[Dict[str, float], dict]:
             ser = df[col].dropna()
             info["lab_name"] = str(ser.iloc[0]) if not ser.empty else None
         if "latitude" in lower and info["latitude"] is None:
-            info["latitude"] = _first_float(df[col])
+            info["latitude"] = _first_coord(df[col])
         if "longitude" in lower and info["longitude"] is None:
-            info["longitude"] = _first_float(df[col])
+            info["longitude"] = _first_coord(df[col])
         if lower in ["ph", "pH".lower()] and info["pH"] is None:
             info["pH"] = _first_float(df[col])
         if "tds" in lower and info["TDS_mg_L"] is None:

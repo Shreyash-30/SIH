@@ -9,6 +9,10 @@ const ACCEPTED_TYPES = [
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/pdf',
+  // Some browsers/dev tools report generic/empty types for drag-drop
+  'text/plain',
+  'application/octet-stream',
+  ''
 ]
 
 function FileUploadBox({ onComplete }) {
@@ -20,6 +24,7 @@ function FileUploadBox({ onComplete }) {
   const [isExtracting, setIsExtracting] = useState(false)
   const [uploadedSampleId, setUploadedSampleId] = useState(null)
   const inputRef = useRef(null)
+  const [uploadTimerMs, setUploadTimerMs] = useState(0)
 
   const onSelectClick = useCallback(() => {
     inputRef.current?.click()
@@ -28,7 +33,10 @@ function FileUploadBox({ onComplete }) {
   const validateFile = (file) => {
     if (!file) return 'No file selected.'
     if (!ACCEPTED_TYPES.includes(file.type)) {
-      return 'Unsupported format. Use CSV, Excel, or PDF.'
+      // Fallback to extension-based validation
+      const name = (file.name || '').toLowerCase()
+      const okExt = name.endsWith('.csv') || name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.pdf')
+      if (!okExt) return 'Unsupported format. Use CSV, Excel, or PDF.'
     }
     if (file.size > MAX_SIZE_BYTES) {
       return 'File too large. Max 50MB.'
@@ -63,7 +71,19 @@ function FileUploadBox({ onComplete }) {
     (e) => {
       e.preventDefault()
       e.stopPropagation()
-      handleFiles(e.dataTransfer.files)
+      const dt = e.dataTransfer
+      if (dt?.items && dt.items.length > 0) {
+        const files = []
+        for (let i = 0; i < dt.items.length; i++) {
+          const it = dt.items[i]
+          if (it.kind === 'file') {
+            const f = it.getAsFile()
+            if (f) files.push(f)
+          }
+        }
+        if (files.length > 0) return handleFiles(files)
+      }
+      handleFiles(dt?.files)
     },
     [handleFiles]
   )
@@ -83,8 +103,11 @@ function FileUploadBox({ onComplete }) {
     if (!fileInfo || isUploading) return
     setError('')
     setIsUploading(true)
+    setUploadTimerMs(0)
     setFileInfo((prev) => (prev ? { ...prev, status: 'Uploading…' } : prev))
     try {
+      // Debug: log endpoint and payload
+      console.debug('Uploading to', `${API_BASE}/api/upload`, 'file:', fileInfo?.name)
       const form = new FormData()
       form.append('file', fileInfo.file, fileInfo.name)
       const resp = await fetch(`${API_BASE}/api/upload`, {
@@ -96,6 +119,7 @@ function FileUploadBox({ onComplete }) {
         throw new Error(txt || 'Upload failed')
       }
       const data = await resp.json()
+      console.debug('Upload success, response:', data)
       setUploadedSampleId(data?.id || null)
       setServerData(data)
       if (typeof onComplete === 'function') onComplete(data)
@@ -104,12 +128,29 @@ function FileUploadBox({ onComplete }) {
       // Navigate to results route with data
       navigate('/results', { state: { data } })
     } catch (e) {
+      console.error('Upload error:', e)
       setError(typeof e?.message === 'string' ? e.message : 'Upload failed')
       setFileInfo((prev) => (prev ? { ...prev, status: 'Error' } : prev))
     } finally {
       setIsUploading(false)
     }
   }
+
+  // Upload timer
+  useEffect(() => {
+    let intervalId = null
+    let startTs = Date.now()
+    if (isUploading) {
+      startTs = Date.now()
+      setUploadTimerMs(0)
+      intervalId = setInterval(() => {
+        setUploadTimerMs(Date.now() - startTs)
+      }, 250)
+    } else {
+      setUploadTimerMs(0)
+    }
+    return () => { if (intervalId) clearInterval(intervalId) }
+  }, [isUploading])
 
   // Instant display: no polling
   useEffect(() => { /* no-op */ }, [])
@@ -133,6 +174,14 @@ function FileUploadBox({ onComplete }) {
           role="region"
           aria-label="Drag and drop file upload area"
         >
+          {isUploading && (
+            <div className="mb-4 rounded-md border px-3 py-2 text-sm flex items-center gap-2" style={{ borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', color: '#1E40AF' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="animate-spin" style={{ animationDuration: '1s' }}>
+                <path d="M12 2a10 10 0 1 0 10 10" stroke="#1E40AF" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <span>Uploading… {new Date(uploadTimerMs).toISOString().substring(14, 19)}</span>
+            </div>
+          )}
           <div className="mb-3" aria-hidden="true">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#004E92" className="w-10 h-10 md:w-12 md:h-12">
               <path d="M7 20a5 5 0 1 1 0-10 6 6 0 1 1 11.31 3.33A4.5 4.5 0 1 1 18.5 20H7zm4-7.5V17a1 1 0 1 0 2 0v-4.5l1.293 1.293a1 1 0 0 0 1.414-1.414l-3-3a1 1 0 0 0-1.414 0l-3 3a1 1 0 0 0 1.414 1.414L11 12.5z" />
