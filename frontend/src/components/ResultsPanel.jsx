@@ -45,7 +45,6 @@ export default function ResultsPanel() {
   const [heatmapOn, setHeatmapOn] = useState(true)
 
   // Server-rendered visualization images
-  const [vizExceedUrl, setVizExceedUrl] = useState(null)
   const [vizHpiUrl, setVizHpiUrl] = useState(null)
   const [vizHpiOverallUrl, setVizHpiOverallUrl] = useState(null)
   const [vizHeiPliUrl, setVizHeiPliUrl] = useState(null)
@@ -262,19 +261,12 @@ export default function ResultsPanel() {
     async function fetchViz() {
       if (!data?.id) return
       try {
-        // Step 1: Exceedances (mean vs limit)
-        const exResp = await fetch(`${API_BASE}/api/visualization/exceedances?sample_id=${data.id}&use_timeseries_mean=true`)
-        if (exResp.ok) {
-          const exJson = await exResp.json()
-          if (!aborted && exJson?.image_url) setVizExceedUrl(`${API_BASE}${exJson.image_url}`)
-        }
-      } catch {}
-      try {
+        // Step 2: HPI monthly
         // Step 2: HPI monthly
         const hpiResp = await fetch(`${API_BASE}/api/visualization/hpi?sample_id=${data.id}`)
         if (hpiResp.ok) {
           const hpiJson = await hpiResp.json()
-          if (!aborted && hpiJson?.image_url) setVizHpiUrl(`${API_BASE}${hpiJson.image_url}`)
+          if (!aborted && hpiJson?.image_url) setVizHpiUrl(`${API_BASE}${hpiJson.image_url}?t=${Date.now()}`)
         }
       } catch {}
       try {
@@ -282,7 +274,7 @@ export default function ResultsPanel() {
         const hpiOverallResp = await fetch(`${API_BASE}/api/visualization/hpi-overall?sample_id=${data.id}`)
         if (hpiOverallResp.ok) {
           const hpiOverallJson = await hpiOverallResp.json()
-          if (!aborted && hpiOverallJson?.image_url) setVizHpiOverallUrl(`${API_BASE}${hpiOverallJson.image_url}`)
+          if (!aborted && hpiOverallJson?.image_url) setVizHpiOverallUrl(`${API_BASE}${hpiOverallJson.image_url}?t=${Date.now()}`)
         }
       } catch {}
       try {
@@ -290,7 +282,7 @@ export default function ResultsPanel() {
         const heiResp = await fetch(`${API_BASE}/api/visualization/hei-pli?sample_id=${data.id}`)
         if (heiResp.ok) {
           const heiJson = await heiResp.json()
-          if (!aborted && heiJson?.image_url) setVizHeiPliUrl(`${API_BASE}${heiJson.image_url}`)
+          if (!aborted && heiJson?.image_url) setVizHeiPliUrl(`${API_BASE}${heiJson.image_url}?t=${Date.now()}`)
         }
       } catch {}
       try {
@@ -298,7 +290,7 @@ export default function ResultsPanel() {
         const hqResp = await fetch(`${API_BASE}/api/visualization/hq?sample_id=${data.id}`)
         if (hqResp.ok) {
           const hqJson = await hqResp.json()
-          if (!aborted && hqJson?.image_url) setVizHqUrl(`${API_BASE}${hqJson.image_url}`)
+          if (!aborted && hqJson?.image_url) setVizHqUrl(`${API_BASE}${hqJson.image_url}?t=${Date.now()}`)
         }
       } catch {}
     }
@@ -365,6 +357,54 @@ export default function ResultsPanel() {
     const maxVal = Math.max(1, ...series.map(d => (Number.isFinite(d.value) ? d.value : 0)))
     return { series, maxVal }
   }, [metalFormulas])
+
+  // Final laboratory-style summary report derived from indices and formulas
+  const finalReport = useMemo(() => {
+    if (!metalIndices || metalIndices.error || !metalIndices.table_data || !metalIndices.metal_headers) return null
+    const headers = metalIndices.metal_headers
+    const means = metalIndices.table_data['mean_mgL'] || {}
+    const lims = metalIndices.table_data['limit_mgL'] || {}
+
+    const perMetal = headers.map(m => {
+      const mean = parseFloat(means[m])
+      const lim = parseFloat(lims[m] ?? limits?.[m])
+      const exceed = Number.isFinite(mean) && Number.isFinite(lim) && lim > 0 && mean > lim
+      return { metal: m, mean: Number.isFinite(mean) ? mean : null, limit: Number.isFinite(lim) ? lim : null, exceed }
+    })
+
+    // Optional: compute overall HPI and HEI if formula terms are available
+    let hpi = null, hpiStatus = null, hei = null, heiStatus = null, topContributor = null
+    if (metalFormulas && metalFormulas.table_data && metalFormulas.metal_headers) {
+      const W = metalFormulas.table_data['W'] || {}
+      const WQ = metalFormulas.table_data['WQ'] || {}
+      const HEI_term = metalFormulas.table_data['HEI_term'] || {}
+      let sumW = 0, sumWQ = 0, maxWQ = -Infinity, maxMetal = null, sumHEI = 0
+      metalFormulas.metal_headers.forEach(m => {
+        const w = parseFloat(W[m])
+        const wq = parseFloat(WQ[m])
+        const heiTerm = parseFloat(HEI_term[m])
+        if (Number.isFinite(w)) sumW += w
+        if (Number.isFinite(wq)) {
+          sumWQ += wq
+          if (wq > maxWQ) { maxWQ = wq; maxMetal = m }
+        }
+        if (Number.isFinite(heiTerm)) sumHEI += heiTerm
+      })
+      if (sumW > 0) {
+        hpi = sumWQ / sumW
+        hpiStatus = hpi < 100 ? 'Safe' : (hpi < 150 ? 'Caution' : 'Unsafe')
+      }
+      if (Number.isFinite(sumHEI)) {
+        hei = sumHEI
+        heiStatus = hei < 5 ? 'Within Limit' : 'Exceeds Threshold'
+      }
+      if (Number.isFinite(maxWQ) && maxMetal) {
+        topContributor = { metal: maxMetal, wq: maxWQ }
+      }
+    }
+
+    return { perMetal, hpi, hpiStatus, hei, heiStatus, topContributor }
+  }, [metalIndices, metalFormulas, limits])
 
   // Fetch metal indices table (avg vs limits) when we have timeseries
   useEffect(() => {
@@ -450,6 +490,66 @@ export default function ResultsPanel() {
             <span>
               Generating report… {new Date(reportTimerMs).toISOString().substring(14, 19)}
             </span>
+          </div>
+        )}
+
+        {/* Final Laboratory-Style Summary Report */}
+        {finalReport && (
+          <div className="mt-8">
+            <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
+              <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>Final Laboratory Report (Summary)</div>
+              <div className="p-4 space-y-4">
+                {/* Overall indices summary */}
+                <div className="text-sm">
+                  {typeof finalReport.hpi === 'number' && (
+                    <div className="mb-1"><span className="font-medium" style={{ color: '#004E92' }}>HPI (overall):</span> {finalReport.hpi.toFixed(2)} — <span>{finalReport.hpiStatus}</span> <span className="text-gray-500">(Safe&lt;100, 100–150 Caution, ≥150 Unsafe)</span></div>
+                  )}
+                  {typeof finalReport.hei === 'number' && (
+                    <div><span className="font-medium" style={{ color: '#004E92' }}>HEI (overall):</span> {finalReport.hei.toFixed(2)} — <span>{finalReport.heiStatus}</span> <span className="text-gray-500">(Threshold ≈ 5.0)</span></div>
+                  )}
+                </div>
+                {/* Per-metal exceedance table */}
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: '#004E92' }}>
+                        <th className="px-3 py-2">Metal</th>
+                        <th className="px-3 py-2">Mean (mg/L)</th>
+                        <th className="px-3 py-2">Permissible (mg/L)</th>
+                        <th className="px-3 py-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {finalReport.perMetal
+                        .slice()
+                        .sort((a,b) => a.metal.localeCompare(b.metal))
+                        .map(row => (
+                          <tr key={row.metal} className="border-t" style={{ borderColor: '#E5E7EB' }}>
+                            <td className="px-3 py-2" style={{ color: '#004E92' }}>{row.metal}</td>
+                            <td className="px-3 py-2" style={{ color: row.exceed ? '#B91C1C' : undefined }}>{Number.isFinite(row.mean) ? row.mean.toFixed(3) : '-'}</td>
+                            <td className="px-3 py-2">{Number.isFinite(row.limit) ? row.limit.toFixed(3) : '-'}</td>
+                            <td className="px-3 py-2" style={{ color: row.exceed ? '#B91C1C' : '#065F46' }}>{row.exceed ? 'Exceeds Limit' : 'Within Limit'}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Conclusion */}
+                {(finalReport.topContributor || typeof finalReport.hpi === 'number' || typeof finalReport.hei === 'number') && (
+                  <div className="text-sm">
+                    {finalReport.topContributor && (
+                      <div className="mb-1"><span className="font-medium" style={{ color: '#004E92' }}>Highest contributor to HPI:</span> {finalReport.topContributor.metal} <span className="text-gray-600">(W×Q ≈ {finalReport.topContributor.wq.toFixed(2)})</span></div>
+                    )}
+                    {typeof finalReport.hpi === 'number' && (
+                      <div className="mb-1">Overall HPI indicates: <span className="font-medium">{finalReport.hpiStatus}</span>.</div>
+                    )}
+                    {typeof finalReport.hei === 'number' && (
+                      <div>Overall HEI indicates: <span className="font-medium">{finalReport.heiStatus}</span>.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
         {/* If timeseries present, show month-wise table; else show simple list */}
@@ -621,65 +721,12 @@ export default function ResultsPanel() {
           </div>
         )}
 
-        {/* Metal Formula Values Table */}
-        {timeseries && metalFormulas && !metalFormulas.error && (
-          <div className="mt-8">
-            <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-              <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
-                {metalFormulas.title || 'Metal Formula Values'}
-              </div>
-              {formulasLoading && (
-                <div className="p-4 text-sm text-gray-700">Loading formula values...</div>
-              )}
-              {!formulasLoading && metalFormulas.table_data && (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="text-left" style={{ backgroundColor: '#F9FAFB', color: '#004E92' }}>
-                        <th className="px-3 py-2">Metal</th>
-                        {metalFormulas.metal_headers?.map(h => (
-                          <th key={h} className="px-3 py-2">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {metalFormulas.row_labels?.map(label => (
-                        <tr key={label} className="border-t" style={{ borderColor: '#E5E7EB' }}>
-                          <td className="px-3 py-2 font-medium" style={{ color: '#004E92' }}>
-                            {label === 'Q' ? 'Q (HPI)'
-                              : label === 'W' ? 'W (HPI)'
-                              : label === 'WQ' ? 'W×Q (HPI contribution)'
-                              : label === 'Cf' ? 'Cf (Cd)'
-                              : label === 'HEI_term' ? 'Term (HEI)'
-                              : label === 'CDI' ? 'CDI'
-                              : label === 'HQ' ? 'HQ'
-                              : label}
-                          </td>
-                          {metalFormulas.metal_headers?.map(h => (
-                            <td key={`${label}-${h}`} className="px-3 py-2">
-                              {metalFormulas.table_data?.[label]?.[h] ?? '-'}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        
 
         {/* Correlation matrices removed as requested */}
         {/* Server-rendered visualizations (images) */}
-        {(vizExceedUrl || vizHpiUrl || vizHpiOverallUrl || vizHeiPliUrl || vizHqUrl) && (
+        {(vizHpiUrl || vizHpiOverallUrl || vizHeiPliUrl || vizHqUrl) && (
           <div className="mt-8 grid grid-cols-1 gap-6">
-            {vizExceedUrl && (
-              <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>Mean vs Limit (Color-coded Exceedances)</div>
-                <div className="p-4 overflow-x-auto"><img src={vizExceedUrl} alt="Exceedances" className="max-w-full h-auto" /></div>
-              </div>
-            )}
             {vizHpiUrl && (
               <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
                 <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>Monthly HPI (Color-coded)</div>
@@ -709,103 +756,7 @@ export default function ResultsPanel() {
             )}
           </div>
         )}
-                {/* Mean Concentration vs Permissible Limit (color-coded) */}
-                {(() => {
-          // Prefer backend metalIndices.mean_mgL; else compute from timeseries
-          let means = null
-          let metalsForMeans = []
-          if (metalIndices?.table_data?.['mean_mgL'] && metalIndices?.metal_headers) {
-            means = metalIndices.table_data['mean_mgL']
-            metalsForMeans = metalIndices.metal_headers
-          } else if (timeseries) {
-            const metalsList = Object.keys(timeseries || {})
-            means = {}
-            metalsList.forEach(m => {
-              const vals = Object.values(timeseries[m] || {})
-                .map(v => (typeof v === 'number' ? v : parseFloat(v)))
-                .filter(v => Number.isFinite(v))
-              const mean = vals.length ? (vals.reduce((s, v) => s + v, 0) / vals.length) : 0
-              means[m] = mean
-            })
-            metalsForMeans = metalsList
-          }
-          if (!means || metalsForMeans.length === 0) return null
-
-          const series = metalsForMeans.map(m => ({
-            metal: m,
-            mean: parseFloat(means[m]) || 0,
-            limit: parseFloat(limits?.[m]) || 0,
-          }))
-
-          const maxVal = Math.max(1, ...series.flatMap(d => [d.mean, d.limit]).filter(Number.isFinite))
-          const width = Math.max(700, series.length * 70)
-          const height = 320
-          const padding = { top: 28, right: 24, bottom: 70, left: 56 }
-          const chartW = width - padding.left - padding.right
-          const chartH = height - padding.top - padding.bottom
-          const groupWidth = Math.max(28, chartW / (series.length * 1.2))
-          const barWidth = Math.max(18, groupWidth * 0.6)
-          const scaleY = v => chartH * (v / maxVal)
-
-          return (
-            <div className="mt-8">
-              <div className="rounded-lg border" style={{ borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' }}>
-                <div className="p-3 text-sm font-semibold" style={{ color: '#004E92' }}>
-                  Mean Concentration vs Permissible Limit
-                </div>
-                <div className="p-4 overflow-x-auto">
-                  <svg width={width} height={height} role="img" aria-label="Mean Concentration vs Limit">
-                    <g transform={`translate(${padding.left},${padding.top})`}>
-                      <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="#e5e7eb" />
-                      <line x1={0} y1={0} x2={0} y2={chartH} stroke="#e5e7eb" />
-                      {series.map((d, i) => {
-                        const x0 = i * (groupWidth * 1.05)
-                        const h = scaleY(Math.max(0, d.mean))
-                        const y = chartH - h
-                        const isExceed = Number.isFinite(d.limit) && d.limit > 0 && d.mean > d.limit
-                        const color = isExceed ? '#ef4444' : '#10b981'
-                        const limitY = chartH - scaleY(Math.max(0, d.limit))
-                        return (
-                          <g key={d.metal}>
-                            {/* Bar */}
-                            <rect x={x0} y={y} width={barWidth} height={h} fill={color} rx={3} />
-                            {/* Mean label */}
-                            <text x={x0 + barWidth / 2} y={y - 6} textAnchor="middle" fontSize="10" fill="#374151">
-                              {Number.isFinite(d.mean) ? d.mean.toFixed(2) : '-'}
-                            </text>
-                            {/* Per-metal limit line */}
-                            {Number.isFinite(d.limit) && d.limit > 0 && (
-                              <g>
-                                <line x1={x0 - 4} x2={x0 + barWidth + 4} y1={limitY} y2={limitY} stroke="#111827" strokeDasharray="4,3" />
-                                <text x={x0 + barWidth + 6} y={limitY - 2} fontSize="10" fill="#111827">{d.limit.toFixed(2)}</text>
-                              </g>
-                            )}
-                            {/* X labels */}
-                            <text transform={`translate(${x0 + barWidth / 2}, ${chartH + 40}) rotate(45)`} textAnchor="start" fontSize="10" fill="#374151">
-                              {d.metal}
-                            </text>
-                          </g>
-                        )
-                      })}
-                      {/* Y axis labels */}
-                      <text x={-8} y={chartH} textAnchor="end" fontSize="10" fill="#6b7280">0</text>
-                      <text x={-8} y={0} textAnchor="end" fontSize="10" fill="#6b7280">{maxVal.toFixed(2)}</text>
-                    </g>
-                    {/* Legend */}
-                    <g transform={`translate(${padding.left}, ${height - 24})`}>
-                      <rect x={0} y={-10} width={12} height={12} fill="#10b981" rx={2} />
-                      <text x={18} y={0} fontSize="12" fill="#374151">Below limit</text>
-                      <rect x={120} y={-10} width={12} height={12} fill="#ef4444" rx={2} />
-                      <text x={138} y={0} fontSize="12" fill="#374151">Exceeds limit</text>
-                      <line x1={230} x2={250} y1={-4} y2={-4} stroke="#111827" strokeDasharray="4,3" />
-                      <text x={256} y={0} fontSize="12" fill="#374151">Limit</text>
-                    </g>
-                  </svg>
-                </div>
-              </div>
-            </div>
-          )
-        })()}
+                
 
         {/* HPI Combined Plot: metals on X-axis, W×Q on Y-axis */}
         {timeseries && hpiCombined && (
