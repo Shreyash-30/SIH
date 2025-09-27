@@ -56,8 +56,9 @@ def plot_exceedances_bar(means: Dict[str, float], title: str, out_path: str) -> 
     df['Exceeds'] = df['Mean_mgL'] > df['Limit_mgL']
 
     plt.figure(figsize=(9, 5))
-    palette = df['Exceeds'].map(lambda x: '#ef4444' if x else '#10b981')
-    sns.barplot(x='Metal', y='Mean_mgL', data=df, palette=palette)
+    # Color bars by exceedance status; set hue to avoid seaborn deprecation
+    exceed_palette = {True: '#ef4444', False: '#10b981'}
+    sns.barplot(x='Metal', y='Mean_mgL', data=df, hue='Exceeds', dodge=False, palette=exceed_palette)
     # Plot per-metal limit markers as dashed lines
     for i, lim in enumerate(df['Limit_mgL']):
         if pd.notna(lim):
@@ -65,7 +66,8 @@ def plot_exceedances_bar(means: Dict[str, float], title: str, out_path: str) -> 
     plt.title(title)
     plt.ylabel('Concentration (mg/L)')
     plt.xlabel('Metal')
-    plt.legend(handles=[], labels=[])
+    # Hide legend since color encodes exceedance only
+    plt.legend([], [], frameon=False)
     return save_fig(out_path)
 
 
@@ -151,11 +153,13 @@ def plot_hpi_monthly(timeseries: Dict[str, Dict[str, float]], title: str, out_pa
     colors = [color_map[c] for c in categories]
 
     plt.figure(figsize=(9, 5))
-    sns.barplot(x=months, y=values, palette=colors)
+    df_pm = pd.DataFrame({'Month': months, 'HPI': values})
+    sns.barplot(x='Month', y='HPI', data=df_pm, hue='Month', dodge=False, palette=colors, legend=False)
     plt.axhline(safe_thresh, color='green', linestyle='--', label='Safe Threshold')
     plt.axhline(unsafe_thresh, color='red', linestyle='--', label='Unsafe Threshold')
     plt.title(title)
     plt.ylabel('HPI')
+    # Show legend for threshold lines only
     plt.legend()
     return save_fig(out_path)
 
